@@ -1,0 +1,24 @@
+.python/
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.webui_secret_key
+webui-data/
+runtime/
+logs/
+runs/
+oputs/
+outputs/
+evidence/
+*.log
+*.blend1
+*.inspect.ndjson
+# Do not accidentally publish company workbooks/models.
+inputs/*
+!inputs/Footwear_BOM.xlsx
+!inputs/Sneaker_Unassigned.blend
+!inputs/before.png
