@@ -104,9 +104,23 @@ def state():
 
 
 def fingerprint(service):
-    paths = [CONFIG_FILE, ROOT / "manage.py", ROOT / "project_config.py"]
+    paths = [
+        CONFIG_FILE,
+        ROOT / "manage.py",
+        ROOT / "project_config.py",
+        ROOT / "tool_registry.py",
+        ROOT / "webui_tool.py",
+        *sorted((ROOT / "tool-library").rglob("*.json")),
+    ]
     if service == "api":
-        paths += [ROOT / "api_service.py", *sorted((ROOT / "adapters").glob("*.py"))]
+        paths += [
+            ROOT / "api_service.py",
+            ROOT / "contracts.py",
+            *sorted((ROOT / "adapters").glob("*.py")),
+            *sorted((ROOT / "workflows").rglob("*.py")),
+            *sorted((ROOT / "workflows" / "definitions").glob("*.json")),
+            *sorted((ROOT / "schemas").glob("*.json")),
+        ]
     return hashlib.sha256(b"".join(p.read_bytes() for p in paths)).hexdigest()
 
 
@@ -322,24 +336,23 @@ def sync_webui(config):
     registered = api(route, tool_body)
     expected = {
         "list_demo_files",
-        "export_excel_to_vbom",
-        "apply_vbom_in_blender",
+        "run_bom_pipeline",
+        "get_bom_pipeline_job",
         "list_blender_addons",
         "run_blender_addon",
         "get_blender_job",
-        "get_run_result",
+        "cancel_blender_job",
     }
     if {s["name"] for s in registered.get("specs", [])} != expected:
         raise RuntimeError("Registered tool schema differs from the expected tools")
     system = (
         "Execute Excel-to-Blender requests using the supplied tools. First call list_demo_files, using the user input_dir or empty for the configured default. "
         "Select the exact requested Excel filename. If none was specified and multiple files are present, ask which one. "
-        "Call export_excel_to_vbom with the full excel_path and the user output_dir, or empty for the configured default. Preserve the requested directory spelling. "
-        "Wait for ok=true, then call apply_vbom_in_blender with the exact returned vbom_path, the requested model_path or empty for the configured default. "
-        "Use open_window=true unless the user requests background processing. Finish both export and apply when requested. "
-        "Use get_run_result after a timeout; never invent paths, ignore errors, or report completion unless status=completed. "
+        "For every end-to-end Excel to Blender request, call run_bom_pipeline exactly once with the selected full paths; Python enforces export, apply and verification in order. Preserve the requested directory spelling. Use open_result=true unless the user requests background processing. "
+        "Use get_bom_pipeline_job to inspect a workflow without rerunning it. Never invent paths, ignore errors, or report completion unless status=completed. "
         "When the user asks for an optional company add-on or Rhino Server, first call list_blender_addons. Choose only an entry whose description matches the request, then call run_blender_addon using its exact id and documented parameters. Never invent operator ids or parameters. "
         "One-shot Blender operators run through a queue in a long-running Blender Agent. If a tool returns a wait timeout, use get_blender_job with its exact job_id before deciding whether to retry. "
+        "Only call cancel_blender_job when the user explicitly asks to cancel a queued Blender job. "
         "Include the actual output path. Respond briefly in Vietnamese. "
     )
     local_operations = sorted(

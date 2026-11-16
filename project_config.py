@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+from tool_registry import load_catalog
+
 ROOT = Path(__file__).resolve().parent
 CONFIG_FILE = ROOT / "config.json"
 ROUTES = {
@@ -20,6 +22,9 @@ LOCAL_ROUTES = {
     "run_operator": "/blender/operators/run",
     "agent": "/blender/agent",
     "agent_job": "/blender/jobs/{run_id}",
+    "cancel_agent_job": "/blender/jobs/{run_id}/cancel",
+    "bom_pipeline": "/workflows/bom",
+    "bom_pipeline_job": "/workflows/bom/{run_id}",
 }
 
 
@@ -30,6 +35,8 @@ def _validate_blender_agent(config):
     integer_ranges = {
         "startup_timeout_seconds": (5, 300),
         "job_timeout_seconds": (5, 3600),
+        "hung_grace_seconds": (1, 300),
+        "max_queued_jobs": (1, 1000),
     }
     for key, limits in integer_ranges.items():
         value = agent.get(key)
@@ -39,6 +46,8 @@ def _validate_blender_agent(config):
         value = agent.get(key)
         if type(value) not in (int, float) or not 0.05 <= value <= 10:
             raise ValueError(f"config.json: blender_agent.{key} is invalid")
+    if type(agent.get("auto_restart_hung")) is not bool:
+        raise ValueError("config.json: blender_agent.auto_restart_hung must be boolean")
 
 
 def _validate_blender_operators(config):
@@ -138,6 +147,9 @@ def load(path=None):
     if not config["ollama"]["model"].strip():
         raise ValueError("config.json: ollama.model is required")
     _validate_blender_agent(config)
+    catalog = load_catalog(path.parent, config.get("tool_library"))
+    config["_tool_catalog"] = catalog
+    config["blender_operators"] = catalog["blender_operators"]
     _validate_blender_operators(config)
     for key in ("inputs", "outputs", "default_model"):
         if (

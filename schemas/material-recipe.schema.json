@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.example/schemas/material-recipe.schema.json",
+  "title": "Material Recommendation Recipe",
+  "type": "object",
+  "required": ["schema_version", "regions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_image": {"type": ["string", "null"]},
+    "regions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["material_type", "base_color", "roughness", "metallic"],
+        "properties": {
+          "material_type": {"type": "string", "minLength": 1},
+          "base_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+          "roughness": {"type": "number", "minimum": 0, "maximum": 1},
+          "metallic": {"type": "number", "minimum": 0, "maximum": 1},
+          "normal_strength": {"type": "number", "minimum": 0, "maximum": 5},
+          "texture_scale": {"type": "number", "exclusiveMinimum": 0},
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

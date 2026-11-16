@@ -33,7 +33,10 @@ def write_json(path, value):
 
 root_text, config_text, bootstrap_text = sys.argv[sys.argv.index("--") + 1 :]
 ROOT = Path(root_text).resolve()
-CONFIG = read_json(config_text)
+sys.path.insert(0, str(ROOT))
+from project_config import load as load_project_config
+
+CONFIG = load_project_config(config_text)
 BOOTSTRAP = Path(bootstrap_text)
 AGENT_ROOT = ROOT / "runtime" / "blender-agent"
 JOBS = AGENT_ROOT / "jobs"
@@ -88,6 +91,8 @@ def clear_scene_for_template():
 
 
 def recover_interrupted_jobs():
+    for claim in QUEUE.glob("*.claim"):
+        claim.unlink(missing_ok=True)
     for path in JOBS.glob("*.json"):
         try:
             job = read_json(path)
@@ -131,8 +136,14 @@ def find_operator(identifier):
 
 def run_job(path, queue_marker):
     global CURRENT_JOB
+    claim_marker = queue_marker.with_suffix(".claim")
+    try:
+        os.replace(queue_marker, claim_marker)
+    except FileNotFoundError:
+        return
     job = read_json(path)
     if job.get("status") != "queued":
+        claim_marker.unlink(missing_ok=True)
         return
     CURRENT_JOB = job["job_id"]
     job.update(
@@ -142,7 +153,7 @@ def run_job(path, queue_marker):
         agent_instance_id=INSTANCE_ID,
     )
     write_json(path, job)
-    queue_marker.unlink(missing_ok=True)
+    claim_marker.unlink(missing_ok=True)
     write_state("busy", CURRENT_JOB)
     reset_after = None
     try:

@@ -8,12 +8,14 @@ from adapters.excel import export_excel
 from adapters.blender import apply_vbom
 from adapters.operators import (
     agent_status,
+    cancel_agent_job,
     ensure_agent,
     get_agent_job,
     list_operators,
     run_operator,
     stop_agent,
 )
+from workflows.bom_pipeline import get_bom_pipeline_job, run_bom_pipeline
 
 app = FastAPI(
     title="Excel and Blender Demo API",
@@ -41,6 +43,15 @@ class OperatorRequest(BaseModel):
     parameters: dict[str, object] = Field(default_factory=dict)
     model_path: str = ""
     wait_for_completion: bool = True
+
+
+class BomPipelineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    excel_path: str
+    model_path: str = ""
+    output_dir: str = ""
+    open_result: bool = True
+    force_new: bool = False
 
 
 @app.exception_handler(ValueError)
@@ -84,6 +95,22 @@ def files(input_dir: str = ""):
     return list_files(input_dir)
 
 
+@app.post("/workflows/bom", tags=["Workflows"])
+def bom_pipeline(body: BomPipelineRequest):
+    return run_bom_pipeline(
+        body.excel_path,
+        body.model_path,
+        body.output_dir,
+        body.open_result,
+        body.force_new,
+    )
+
+
+@app.get("/workflows/bom/{job_id}", tags=["Workflows"])
+def bom_pipeline_job(job_id: str):
+    return get_bom_pipeline_job(job_id)
+
+
 @app.post("/excel/export-vbom", tags=["Excel"])
 def excel_export(body: ExportRequest):
     return export_excel(body.excel_path, body.output_dir)
@@ -124,6 +151,11 @@ def blender_agent_stop():
 @app.get("/blender/jobs/{job_id}", tags=["Blender Agent"])
 def blender_agent_job(job_id: str):
     return get_agent_job(job_id)
+
+
+@app.post("/blender/jobs/{job_id}/cancel", tags=["Blender Agent"])
+def blender_agent_job_cancel(job_id: str):
+    return cancel_agent_job(job_id)
 
 
 @app.get("/results/{run_id}", tags=["Results"])

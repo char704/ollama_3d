@@ -102,15 +102,17 @@ class ToolRouting(unittest.IsolatedAsyncioTestCase):
         ), patch.dict(os.environ, {"TEST_BOM_TOKEN": "test-only"}):
             self.assertTrue(json.loads(await tool.list_demo_files())["ok"])
             self.assertTrue(
-                json.loads(await tool.export_excel_to_vbom("C:/data/a.xlsx"))["ok"]
+                json.loads(await tool._export_excel_to_vbom("C:/data/a.xlsx"))["ok"]
             )
             self.assertTrue(
                 json.loads(
-                    await tool.apply_vbom_in_blender("C:/out/a.vbom", open_window=False)
+                    await tool._apply_vbom_in_blender(
+                        "C:/out/a.vbom", open_window=False
+                    )
                 )["ok"]
             )
             self.assertTrue(
-                json.loads(await tool.get_run_result("company-job_42"))["ok"]
+                json.loads(await tool._get_run_result("company-job_42"))["ok"]
             )
         self.assertEqual(
             [r.url.host for r in calls],
@@ -191,7 +193,7 @@ class ToolRouting(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 self.assertFalse(
-                    json.loads(await tool.export_excel_to_vbom("a.xlsx"))["ok"]
+                    json.loads(await tool._export_excel_to_vbom("a.xlsx"))["ok"]
                 )
 
         def timeout(request):
@@ -203,9 +205,10 @@ class ToolRouting(unittest.IsolatedAsyncioTestCase):
                 transport=httpx.MockTransport(timeout), **kw
             ),
         ):
-            result = json.loads(await tool.apply_vbom_in_blender("a.vbom"))
+            result = json.loads(await tool._apply_vbom_in_blender("a.vbom"))
             self.assertFalse(result["ok"])
-            self.assertIn("get_run_result", result["error"])
+        self.assertIn("job", result["error"])
+        self.assertIn("force_new", result["error"])
 
 
 if __name__ == "__main__":

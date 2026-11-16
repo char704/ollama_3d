@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.example/schemas/tool-result.schema.json",
+  "title": "Tool Result",
+  "type": "object",
+  "required": ["ok", "status"],
+  "properties": {
+    "ok": {"type": "boolean"},
+    "status": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string"},
+    "input_paths": {"type": "array", "items": {"type": "string"}},
+    "output_paths": {"type": "array", "items": {"type": "string"}},
+    "details": {"type": "object"},
+    "error": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}

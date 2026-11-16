@@ -1,4 +1,4 @@
-"""Real Open WebUI -> Ollama native tool loop -> Excel API -> Blender API."""
+"""Real Open WebUI -> Ollama -> deterministic BOM workflow -> Blender."""
 
 import json
 import sys
@@ -90,22 +90,32 @@ calls = [
     ),
     encoding="utf-8",
 )
+pipeline = next(
+    (
+        call["result"]
+        for call in calls
+        if call["tool"] == "run_bom_pipeline"
+        and call["result"].get("status") == "completed"
+    ),
+    None,
+)
+assert (
+    pipeline
+), "Ollama did not use run_bom_pipeline; see evidence/webui-api-smoke.json"
 exported = next(
     (
-        c["result"]
-        for c in calls
-        if c["tool"] == "export_excel_to_vbom"
-        and c["result"]["source_excel"] == str(source)
+        step["result"]
+        for step in pipeline["steps"]
+        if step["id"] == "export_vbom" and step["status"] == "completed"
     ),
     None,
 )
 assert exported, "No actual Excel export; see evidence/webui-api-smoke.json"
 applied = next(
     (
-        c["result"]
-        for c in calls
-        if c["tool"] == "apply_vbom_in_blender"
-        and c["result"]["run_id"] == exported["run_id"]
+        step["result"]
+        for step in pipeline["steps"]
+        if step["id"] == "apply_and_verify" and step["status"] == "completed"
     ),
     None,
 )

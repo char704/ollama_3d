@@ -27,9 +27,17 @@ class ApiContract(unittest.TestCase):
         self.assertIn(
             "/blender/jobs/{job_id}", self.client.get("/openapi.json").json()["paths"]
         )
+        self.assertIn(
+            "/blender/jobs/{job_id}/cancel",
+            self.client.get("/openapi.json").json()["paths"],
+        )
+        self.assertIn(
+            "/workflows/bom", self.client.get("/openapi.json").json()["paths"]
+        )
         operators = self.client.get("/blender/operators").json()["operators"]
-        self.assertEqual(operators[0]["id"], "start_rhino_server")
-        self.assertNotIn("agent_reset_failure_test", {item["id"] for item in operators})
+        operator_ids = {item["id"] for item in operators}
+        self.assertIn("start_rhino_server", operator_ids)
+        self.assertNotIn("agent_reset_failure_test", operator_ids)
 
     def test_reject_invalid_paths_and_unknown_parameters(self):
         self.assertEqual(
@@ -65,6 +73,13 @@ class ApiContract(unittest.TestCase):
             self.client.post(
                 "/blender/operators/run",
                 json={"operator_id": "unknown", "parameters": {}},
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/blender/operators/run",
+                json={"operator_id": "agent_reset_failure_test", "parameters": {}},
             ).status_code,
             400,
         )

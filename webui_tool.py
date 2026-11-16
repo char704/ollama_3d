@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 from pathlib import Path
 import httpx
 
@@ -23,6 +24,9 @@ class Tools:
             if _CONFIG_FILE != "__PROJECT_" + "CONFIG_FILE__"
             else Path(__file__).with_name("config.json")
         )
+        project_directory = str(path.resolve().parent)
+        if project_directory not in sys.path:
+            sys.path.insert(0, project_directory)
         spec = importlib.util.spec_from_file_location(
             "_excel_blender_config", path.with_name("project_config.py")
         )
@@ -89,7 +93,7 @@ class Tools:
         except httpx.TimeoutException:
             result = {
                 "ok": False,
-                "error": "API timed out; check get_run_result before retrying Blender.",
+                "error": "API timed out; inspect the relevant workflow or Blender job before retrying. Do not enable force_new blindly.",
             }
         except Exception as exc:
             result = {
@@ -120,7 +124,46 @@ class Tools:
             "files", "GET", params={"input_dir": input_dir}, emitter=__event_emitter__
         )
 
-    async def export_excel_to_vbom(
+    async def run_bom_pipeline(
+        self,
+        excel_path: str,
+        model_path: str = "",
+        output_dir: str = "",
+        open_result: bool = True,
+        force_new: bool = False,
+        __event_emitter__=None,
+    ) -> str:
+        """Run the complete deterministic Excel -> VBOM -> Blender -> verify workflow. Prefer this for a normal end-to-end request.
+        :param excel_path: Exact Excel path returned by list_demo_files.
+        :param model_path: Exact Blender model path, or empty for the configured default.
+        :param output_dir: Requested output directory, or empty for the configured default.
+        :param open_result: True to open the completed Blender model.
+        :param force_new: False reuses an identical active/completed workflow; true runs it again only when the user explicitly asks.
+        """
+        return await self._request(
+            "bom_pipeline",
+            "POST",
+            body={
+                "excel_path": excel_path,
+                "model_path": model_path,
+                "output_dir": output_dir,
+                "open_result": open_result,
+                "force_new": force_new,
+            },
+            emitter=__event_emitter__,
+        )
+
+    async def get_bom_pipeline_job(self, job_id: str, __event_emitter__=None) -> str:
+        """Read a previous BOM workflow state without executing it again.
+        :param job_id: Exact 32-character workflow job_id returned by run_bom_pipeline.
+        """
+        if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+            return json.dumps({"ok": False, "error": "Invalid workflow job_id"})
+        return await self._request(
+            "bom_pipeline_job", "GET", run_id=job_id, emitter=__event_emitter__
+        )
+
+    async def _export_excel_to_vbom(
         self, excel_path: str, output_dir: str = "", __event_emitter__=None
     ) -> str:
         """Call the Excel API to export VBOM. Wait for ok=true before applying; returns vbom_path and run_id.
@@ -134,7 +177,7 @@ class Tools:
             emitter=__event_emitter__,
         )
 
-    async def apply_vbom_in_blender(
+    async def _apply_vbom_in_blender(
         self,
         vbom_path: str,
         model_path: str = "",
@@ -201,7 +244,17 @@ class Tools:
             "agent_job", "GET", run_id=job_id, emitter=__event_emitter__
         )
 
-    async def get_run_result(self, run_id: str, __event_emitter__=None) -> str:
+    async def cancel_blender_job(self, job_id: str, __event_emitter__=None) -> str:
+        """Cancel a queued Blender Agent job. A running or completed job cannot be cancelled.
+        :param job_id: Exact 32-character job_id returned by run_blender_addon.
+        """
+        if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+            return json.dumps({"ok": False, "error": "Invalid Blender Agent job_id"})
+        return await self._request(
+            "cancel_agent_job", "POST", run_id=job_id, emitter=__event_emitter__
+        )
+
+    async def _get_run_result(self, run_id: str, __event_emitter__=None) -> str:
         """Read previous export/apply status without running again. Use after timeouts.
         :param run_id: Exact run_id from export_excel_to_vbom.
         """

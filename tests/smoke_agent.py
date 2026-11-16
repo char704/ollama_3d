@@ -9,6 +9,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from project_config import ROOT, load, service_url
+from adapters.operators import run_operator
 
 sys.stdout.reconfigure(encoding="utf-8")
 config = load()
@@ -63,7 +64,14 @@ with httpx.Client(
         assert job["reset_after"]["object_count"] == 0
         assert Path(job["output_path"]).is_file()
 
-    failed = submit("agent_reset_failure_test")
+    hidden_response = client.post(
+        "/blender/operators/run",
+        json={"operator_id": "agent_reset_failure_test", "parameters": {}},
+    )
+    assert hidden_response.status_code == 400
+    failed = run_operator(
+        "agent_reset_failure_test", {}, wait_for_completion=True, internal=True
+    )
     assert failed["status"] == "failed" and failed["reset_after"]["object_count"] == 0
     recovered = submit("add_cube", {"size": 0.75})
     assert recovered["status"] == "completed"

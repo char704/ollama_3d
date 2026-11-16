@@ -30,6 +30,8 @@ AGENT_STOP = AGENT_ROOT / "stop.request.json"
 OPERATOR_CALLS = ROOT / "runtime" / "operator-calls"
 OPERATOR_PROCESSES = ROOT / "runtime" / "operator-processes.json"
 _lock = threading.Lock()
+_queue_lock = threading.Lock()
+_persistent_lock = threading.Lock()
 
 
 def _now():
@@ -39,8 +41,11 @@ def _now():
 def _agent_fingerprint():
     paths = [
         CONFIG_FILE,
+        ROOT / "project_config.py",
+        ROOT / "tool_registry.py",
         ROOT / "adapters" / "operators.py",
         ROOT / "blender" / "agent_runtime.py",
+        *sorted((ROOT / "tool-library").rglob("*.json")),
     ]
     return hashlib.sha256(b"".join(path.read_bytes() for path in paths)).hexdigest()
 
@@ -143,6 +148,40 @@ def _verified_process(state, script_name):
         return None
 
 
+def _terminate_process(process):
+    process.terminate()
+    try:
+        process.wait(10)
+    except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
+        process.kill()
+        process.wait(10)
+
+
+def _job_runtime(job):
+    started = job.get("started_at")
+    if not started:
+        return 0.0
+    try:
+        value = datetime.datetime.fromisoformat(started)
+        return max(0.0, (datetime.datetime.now().astimezone() - value).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _mark_job_interrupted(job_id, error):
+    if not job_id:
+        return
+    path = AGENT_JOBS / (job_id + ".json")
+    if not path.is_file():
+        return
+    job = read_json(path)
+    if job.get("status") not in ("queued", "running"):
+        return
+    job.update(ok=False, status="interrupted", finished_at=_now(), error=error)
+    write_json(path, job)
+    (AGENT_QUEUE / (job_id + ".json")).unlink(missing_ok=True)
+
+
 def agent_status():
     if not AGENT_STATE.is_file():
         return {"ok": True, "ready": False, "status": "stopped"}
@@ -152,18 +191,40 @@ def agent_status():
         return {**state, "ok": True, "ready": False, "status": "stopped"}
     heartbeat_age = max(0.0, time.time() - AGENT_STATE.stat().st_mtime)
     busy = state.get("status") == "busy"
+    current_job = None
+    runtime = 0.0
+    execution_limit = 0.0
+    if busy and state.get("current_job"):
+        job_path = AGENT_JOBS / (state["current_job"] + ".json")
+        if job_path.is_file():
+            current_job = read_json(job_path)
+            runtime = _job_runtime(current_job)
+            execution_limit = float(
+                current_job.get(
+                    "execution_timeout_seconds",
+                    CONFIG["blender_agent"]["job_timeout_seconds"],
+                )
+            ) + float(CONFIG["blender_agent"]["hung_grace_seconds"])
+    heartbeat_limit = max(
+        5.0, CONFIG["blender_agent"]["heartbeat_interval_seconds"] * 5
+    )
+    heartbeat_fresh = heartbeat_age <= heartbeat_limit
+    busy_within_deadline = (
+        busy and current_job is not None and runtime <= execution_limit
+    )
+    responsive = heartbeat_fresh or busy_within_deadline
     current_version = state.get("fingerprint") == _agent_fingerprint()
-    ready = (
-        heartbeat_age
-        <= max(5.0, CONFIG["blender_agent"]["heartbeat_interval_seconds"] * 5)
-        or busy
-    ) and current_version
+    ready = responsive and current_version
     return {
         **state,
         "ok": True,
         "ready": ready,
         "process_alive": True,
         "current_version": current_version,
+        "responsive": responsive,
+        "unresponsive": not responsive,
+        "job_runtime_seconds": round(runtime, 3) if busy else None,
+        "job_execution_limit_seconds": execution_limit if busy else None,
         "heartbeat_age_seconds": round(heartbeat_age, 3),
     }
 
@@ -177,12 +238,23 @@ def ensure_agent():
             return status
         stale_process = _verified_process(status, "agent_runtime.py")
         if stale_process:
-            if status.get("current_job"):
+            if status.get("current_job") and not status.get("unresponsive"):
                 raise RuntimeError(
-                    "Blender Agent is unresponsive while a job is running"
+                    "Blender Agent must not restart while a healthy job is running"
                 )
-            stale_process.terminate()
-            stale_process.wait(10)
+            if (
+                status.get("current_job")
+                and not CONFIG["blender_agent"]["auto_restart_hung"]
+            ):
+                raise RuntimeError(
+                    "Blender Agent exceeded its execution deadline; automatic restart is disabled"
+                )
+            interrupted_job = status.get("current_job")
+            _terminate_process(stale_process)
+            _mark_job_interrupted(
+                interrupted_job,
+                "Blender Agent exceeded its execution deadline and was restarted.",
+            )
         AGENT_ROOT.mkdir(parents=True, exist_ok=True)
         AGENT_JOBS.mkdir(exist_ok=True)
         AGENT_QUEUE.mkdir(exist_ok=True)
@@ -223,7 +295,7 @@ def ensure_agent():
             if status.get("ready") and status.get("pid") == process.pid:
                 return status
             time.sleep(0.25)
-        process.terminate()
+        _terminate_process(process)
         raise RuntimeError("Blender Agent startup timed out. See " + str(log_path))
 
 
@@ -240,8 +312,7 @@ def stop_agent():
     try:
         process.wait(10)
     except psutil.TimeoutExpired:
-        process.terminate()
-        process.wait(10)
+        _terminate_process(process)
     return {"ok": True, "status": "stopped", "pid": process.pid}
 
 
@@ -258,11 +329,33 @@ def get_agent_job(job_id):
     return read_json(path)
 
 
+def cancel_agent_job(job_id):
+    with _queue_lock:
+        job = get_agent_job(job_id)
+        if job.get("status") != "queued":
+            if job.get("status") in ("completed", "failed", "cancelled", "interrupted"):
+                return {**job, "already_terminal": True}
+            raise RuntimeError("Only a queued Blender Agent job can be cancelled")
+        marker = AGENT_QUEUE / (job_id + ".json")
+        if not marker.is_file():
+            raise RuntimeError("Blender Agent is already claiming this job")
+        job.update(
+            ok=False,
+            status="cancelled",
+            finished_at=_now(),
+            error="Cancelled before Blender execution.",
+        )
+        write_json(AGENT_JOBS / (job_id + ".json"), job)
+        marker.unlink(missing_ok=True)
+        log("cancel_blender_job", {"arguments": {"job_id": job_id}, "result": job})
+        return job
+
+
 def _wait_for_job(job_id, timeout):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         job = get_agent_job(job_id)
-        if job["status"] in ("completed", "failed", "interrupted"):
+        if job["status"] in ("completed", "failed", "cancelled", "interrupted"):
             return job
         time.sleep(0.2)
     job = get_agent_job(job_id)
@@ -276,28 +369,43 @@ def _wait_for_job(job_id, timeout):
 
 def _submit_agent_job(item, parameters, model, wait_for_completion):
     agent = ensure_agent()
-    job_id = uuid.uuid4().hex
-    output_dir = data_path(CONFIG, "outputs") / "agent" / job_id
-    output_dir.mkdir(parents=True, exist_ok=False)
-    job = {
-        "ok": True,
-        "job_id": job_id,
-        "status": "queued",
-        "created_at": _now(),
-        "operator_id": item["id"],
-        "operator": item["operator"],
-        "parameters": parameters,
-        "model_path": str(model) if model else "",
-        "output_path": (
-            str(output_dir / "result.blend") if item.get("save_after") else ""
-        ),
-        "agent_instance_id": agent.get("instance_id"),
-    }
-    write_json(AGENT_JOBS / (job_id + ".json"), job)
-    write_json(
-        AGENT_QUEUE / (job_id + ".json"),
-        {"job_id": job_id, "created_at": job["created_at"]},
-    )
+    with _queue_lock:
+        queued = 0
+        for marker in AGENT_QUEUE.glob("*.json"):
+            try:
+                queued_job = get_agent_job(marker.stem)
+            except (FileNotFoundError, ValueError, KeyError):
+                continue
+            if queued_job.get("status") == "queued":
+                queued += 1
+        if queued >= CONFIG["blender_agent"]["max_queued_jobs"]:
+            raise RuntimeError("Blender Agent queue is full; wait for an existing job")
+        job_id = uuid.uuid4().hex
+        output_dir = data_path(CONFIG, "outputs") / "agent" / job_id
+        output_dir.mkdir(parents=True, exist_ok=False)
+        job = {
+            "ok": True,
+            "job_id": job_id,
+            "status": "queued",
+            "created_at": _now(),
+            "operator_id": item["id"],
+            "operator": item["operator"],
+            "parameters": parameters,
+            "model_path": str(model) if model else "",
+            "output_path": (
+                str(output_dir / "result.blend") if item.get("save_after") else ""
+            ),
+            "execution_timeout_seconds": min(
+                item.get("timeout_seconds", 30),
+                CONFIG["blender_agent"]["job_timeout_seconds"],
+            ),
+            "agent_instance_id": agent.get("instance_id"),
+        }
+        write_json(AGENT_JOBS / (job_id + ".json"), job)
+        write_json(
+            AGENT_QUEUE / (job_id + ".json"),
+            {"job_id": job_id, "created_at": job["created_at"]},
+        )
     log(
         "queue_blender_addon",
         {
@@ -399,8 +507,14 @@ def _run_persistent(item, parameters, model):
     return result
 
 
-def run_operator(operator_id, parameters=None, model_path="", wait_for_completion=True):
-    item = _configured(operator_id)
+def run_operator(
+    operator_id,
+    parameters=None,
+    model_path="",
+    wait_for_completion=True,
+    internal=False,
+):
+    item = _configured(operator_id, include_hidden=internal)
     parameters = _parameters(item, parameters or {})
     if not BLENDER.is_file():
         raise FileNotFoundError("Blender executable not found: " + str(BLENDER))
@@ -410,7 +524,8 @@ def run_operator(operator_id, parameters=None, model_path="", wait_for_completio
         if model.suffix.lower() != ".blend" or not model.is_file():
             raise ValueError("Choose an existing Blender model")
     if item["execution_mode"] == "persistent":
-        result = _run_persistent(item, parameters, model)
+        with _persistent_lock:
+            result = _run_persistent(item, parameters, model)
     else:
         result = _submit_agent_job(item, parameters, model, wait_for_completion)
     log(

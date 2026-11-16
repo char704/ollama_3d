@@ -21,80 +21,14 @@
     "startup_timeout_seconds": 60,
     "job_timeout_seconds": 120,
     "poll_interval_seconds": 0.2,
-    "heartbeat_interval_seconds": 1.0
+    "heartbeat_interval_seconds": 1.0,
+    "hung_grace_seconds": 15,
+    "max_queued_jobs": 25,
+    "auto_restart_hung": true
   },
-  "blender_operators": [
-    {
-      "id": "start_rhino_server",
-      "name": "Start Rhino Server",
-      "description": "Khởi động Rhino Server của công ty trong Blender khi người dùng yêu cầu kết nối hoặc sử dụng Rhino Server.",
-      "operator": "blender_rhino_server.start",
-      "enabled": true,
-      "execution_mode": "persistent",
-      "load_model": false,
-      "save_after": false,
-      "timeout_seconds": 30,
-      "parameters": {
-        "server_adr": {
-          "type": "string",
-          "description": "Địa chỉ server local.",
-          "default": "127.0.0.1",
-          "enum": ["127.0.0.1"]
-        },
-        "server_port": {
-          "type": "integer",
-          "description": "Cổng lắng nghe của Rhino Server.",
-          "default": 55555,
-          "minimum": 1024,
-          "maximum": 65535
-        }
-      }
-    },
-    {
-      "id": "add_cube",
-      "name": "Add Cube",
-      "description": "Tạo một khối cube bằng operator có sẵn của Blender và lưu file kết quả. Dùng khi người dùng yêu cầu tạo cube hoặc kiểm tra Blender Agent.",
-      "operator": "mesh.primitive_cube_add",
-      "enabled": true,
-      "execution_mode": "one_shot",
-      "load_model": false,
-      "save_after": true,
-      "timeout_seconds": 30,
-      "parameters": {
-        "size": {"type": "number", "description": "Kích thước cạnh cube.", "default": 2.0, "minimum": 0.01, "maximum": 100.0}
-      }
-    },
-    {
-      "id": "add_uv_sphere",
-      "name": "Add UV Sphere",
-      "description": "Tạo một UV sphere bằng operator có sẵn của Blender và lưu file kết quả. Dùng khi người dùng yêu cầu tạo hình cầu hoặc kiểm tra Blender Agent.",
-      "operator": "mesh.primitive_uv_sphere_add",
-      "enabled": true,
-      "execution_mode": "one_shot",
-      "load_model": false,
-      "save_after": true,
-      "timeout_seconds": 30,
-      "parameters": {
-        "segments": {"type": "integer", "description": "Số đoạn quanh hình cầu.", "default": 32, "minimum": 8, "maximum": 128},
-        "ring_count": {"type": "integer", "description": "Số vòng theo chiều dọc.", "default": 16, "minimum": 4, "maximum": 64}
-      }
-    },
-    {
-      "id": "agent_reset_failure_test",
-      "name": "Agent Reset Failure Test",
-      "description": "Operator nội bộ để kiểm tra Agent phục hồi và reset scene sau khi một job thất bại.",
-      "operator": "object.modifier_apply",
-      "enabled": true,
-      "exposed_to_model": false,
-      "execution_mode": "one_shot",
-      "load_model": false,
-      "save_after": false,
-      "timeout_seconds": 15,
-      "parameters": {
-        "modifier": {"type": "string", "default": "MISSING_MODIFIER"}
-      }
-    }
-  ],
+  "tool_library": {
+    "directory": "tool-library"
+  },
   "workflow": {
     "files": {"provider": "local"},
     "export": {"provider": "local"},

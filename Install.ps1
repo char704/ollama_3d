@@ -45,8 +45,9 @@ try {
         Install-Package 'Ollama.Ollama'
     }
 
-    $enabledOperators = @($config.blender_operators | Where-Object { $_.enabled -ne $false })
-    $needsBlender = $config.blender_agent.enabled -or $config.workflow.apply.provider -eq 'local' -or $enabledOperators.Count -gt 0
+    $toolLibraryPath = Join-Path $root $config.tool_library.directory
+    $hasBlenderTools = Test-Path -LiteralPath (Join-Path $toolLibraryPath 'blender')
+    $needsBlender = $config.blender_agent.enabled -or $config.workflow.apply.provider -eq 'local' -or $hasBlenderTools
     if ($needsBlender) {
         $blenderPath = [Environment]::ExpandEnvironmentVariables($config.paths.blender_exe)
         if (-not [IO.Path]::IsPathRooted($blenderPath)) { $blenderPath = Join-Path $root $blenderPath }
