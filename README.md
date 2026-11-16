@@ -20,8 +20,8 @@ Bộ cài sẽ kiểm tra các thành phần đã có, cài phần còn thiếu 
 
 - uv và Python 3.12, cùng các thư viện trong `requirements.txt`.
 - Ollama và mô hình AI được chọn trong `config.json`.
-- Blender nếu đang dùng chế độ demo và chưa tìm thấy bản đã cài.
-- API local, Open WebUI và bốn công cụ dùng cho quy trình.
+- Blender khi workflow local hoặc danh sách operator cần sử dụng nó.
+- API điều phối local, Open WebUI và bảy công cụ dùng cho quy trình.
 
 Cần Internet khi tải phần mềm hoặc mô hình AI. Việc cài phần mềm còn thiếu sử dụng WinGet, được cung cấp qua Microsoft App Installer; cài Blender có thể cần quyền quản trị. Node.js không phải thành phần bắt buộc.
 
@@ -66,7 +66,7 @@ Các thiết lập nằm trong **[config.json](config.json)**.
 
 | Thiết lập | Ý nghĩa |
 |---|---|
-| `mode` | `demo` để dùng dữ liệu và công cụ mẫu; `company` để gọi các API công ty |
+| `profile` | Tên hiển thị của bộ cấu hình, ví dụ `demo` hoặc `mixed-company`; không bật/tắt dịch vụ |
 | `paths.inputs` | Thư mục tìm file Excel và mô hình Blender |
 | `paths.outputs` | Thư mục lưu kết quả mặc định; hiện là `oputs` |
 | `paths.default_model` | File `.blend` sử dụng khi yêu cầu không chỉ định mô hình |
@@ -78,7 +78,7 @@ Các thiết lập nằm trong **[config.json](config.json)**.
 | `ollama.model` | Tên mô hình AI; mặc định là `qwen2.5:7b` |
 | `ollama.executable` | Đường dẫn đến Ollama; để trống để tự tìm |
 | `blender_operators` | Danh sách operator Blender mà Ollama được phép xem và gọi |
-| `company_api` | Địa chỉ và thiết lập xác thực cho từng API công ty |
+| `workflow` | Chọn provider `local` hoặc `http` độc lập cho từng bước |
 
 Ví dụ, để dùng dữ liệu trên ổ D, thay mục `paths` bằng:
 
@@ -142,23 +142,25 @@ Có hai cách tích hợp, tùy công cụ công ty cung cấp.
 
 ### Công ty đã có HTTP API
 
-Đặt `mode` thành `company`, sau đó điền mục `company_api`. Các API có thể chạy ở những địa chỉ hoặc cổng khác nhau. Ví dụ dưới đây là giá trị thay cho mục `company_api`; các địa chỉ chỉ dùng để minh họa:
+Trong mục `workflow`, đổi riêng bước cần kết nối từ `local` sang `http`. Các bước còn lại vẫn có thể chạy local, vì vậy API Excel công ty và Blender Agent trên máy có thể dùng chung một workflow. Ví dụ:
 
 ```json
 {
   "files": {
-    "url": "http://127.0.0.1:9001/files",
-    "token_env": ""
+    "provider": "local"
   },
   "export": {
+    "provider": "http",
     "url": "http://127.0.0.1:9001/export-vbom",
     "token_env": "EXCEL_API_TOKEN"
   },
   "apply": {
+    "provider": "http",
     "url": "http://127.0.0.1:9002/apply-vbom",
     "token_env": "BLENDER_API_TOKEN"
   },
   "result": {
+    "provider": "http",
     "url": "http://127.0.0.1:9002/results/{run_id}",
     "token_env": "BLENDER_API_TOKEN"
   }
@@ -178,7 +180,7 @@ Chỉ cần đổi URL khi API công ty nhận và trả dữ liệu theo quy ư
 
 Khi có lỗi, API nên trả mã HTTP 4xx/5xx và JSON dạng `{"ok": false, "error": "Mô tả lỗi"}`. API đọc trạng thái phải tra được mã `run_id` do API xuất VBOM trả về.
 
-Chế độ `company` hiện yêu cầu đủ bốn URL. Nếu công ty chỉ có hai API xuất VBOM và xử lý Blender, cần bổ sung phần tìm file, tra trạng thái hoặc điều chỉnh các công cụ tương ứng trong `webui_tool.py`. Khi cấu hình thiếu hoặc API lỗi, chương trình sẽ báo lỗi thay vì chuyển về demo.
+Mỗi bước `http` cần URL đúng hợp đồng của bước đó. Bước `local` tiếp tục gọi adapter trong project. API điều phối local luôn chạy để phục vụ Blender Agent và operator, bất kể tổ hợp provider nào được chọn.
 
 Nếu API công ty dùng tên tham số, cấu trúc kết quả hoặc cách xác thực khác, sửa phần gọi HTTP trong **`webui_tool.py`**, hoặc tạo một API trung gian để chuyển đổi dữ liệu. Với API xử lý bất đồng bộ, cần bổ sung bước chờ và kiểm tra trạng thái; quy trình hiện tại chờ yêu cầu POST xử lý xong mới tiếp tục.
 

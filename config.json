@@ -1,5 +1,5 @@
 {
-  "mode": "demo",
+  "profile": "demo",
   "paths": {
     "inputs": "inputs",
     "outputs": "oputs",
@@ -95,10 +95,10 @@
       }
     }
   ],
-  "company_api": {
-    "files": {"url": "", "token_env": ""},
-    "export": {"url": "", "token_env": ""},
-    "apply": {"url": "", "token_env": ""},
-    "result": {"url": "", "token_env": ""}
+  "workflow": {
+    "files": {"provider": "local"},
+    "export": {"provider": "local"},
+    "apply": {"provider": "local"},
+    "result": {"provider": "local"}
   }
 }

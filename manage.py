@@ -342,16 +342,24 @@ def sync_webui(config):
         "One-shot Blender operators run through a queue in a long-running Blender Agent. If a tool returns a wait timeout, use get_blender_job with its exact job_id before deciding whether to retry. "
         "Include the actual output path. Respond briefly in Vietnamese. "
     )
-    system += (
-        "These are demo adapters and demo-v1 XML, not company plugins. Each run creates a unique output subfolder. "
-        if config["mode"] == "demo"
-        else "The tools call the configured company APIs. Follow their returned status and paths. "
+    local_operations = sorted(
+        name for name, item in config["workflow"].items() if item["provider"] == "local"
     )
+    http_operations = sorted(
+        name for name, item in config["workflow"].items() if item["provider"] == "http"
+    )
+    system += (
+        "Workflow providers are selected independently. Local operations: "
+        + (", ".join(local_operations) or "none")
+        + ". HTTP operations: "
+        + (", ".join(http_operations) or "none")
+        + ". Follow each provider response and never assume all steps use the same backend. "
+    )
+    profile = config["profile"].strip()
     body = {
         "id": MODEL_ID,
         "base_model_id": config["ollama"]["model"],
-        "name": "Excel → Blender "
-        + ("Demo" if config["mode"] == "demo" else "Company"),
+        "name": "Excel → Blender " + profile.title(),
         "meta": {
             "toolIds": [TOOL_ID],
             "description": "Local Ollama with configured Excel and Blender APIs.",
@@ -372,7 +380,7 @@ def sync_webui(config):
                         "content": "Dùng Footwear_BOM.xlsx, xuất VBOM rồi áp vật liệu và màu vào model mặc định. Mở kết quả."
                     }
                 ]
-                if config["mode"] == "demo"
+                if profile.casefold() == "demo"
                 else []
             ),
         },
@@ -413,13 +421,24 @@ def check(config):
             raise RuntimeError(
                 f"{package}: expected {required}, found {actual}. Run Install.cmd."
             )
-    if config["mode"] == "demo":
-        for key in ("inputs", "default_model", "blender_exe"):
-            if not data_path(config, key).exists():
-                raise FileNotFoundError(
-                    f"config.json paths.{key} does not exist: {data_path(config, key)}"
-                )
-        data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
+    local = {
+        name for name, item in config["workflow"].items() if item["provider"] == "local"
+    }
+    required_paths = set()
+    if local.intersection({"files", "export"}):
+        required_paths.add("inputs")
+    if "apply" in local:
+        required_paths.update({"default_model", "blender_exe"})
+    if config["blender_agent"]["enabled"] or any(
+        item.get("enabled", True) for item in config["blender_operators"]
+    ):
+        required_paths.add("blender_exe")
+    for key in sorted(required_paths):
+        if not data_path(config, key).exists():
+            raise FileNotFoundError(
+                f"config.json paths.{key} does not exist: {data_path(config, key)}"
+            )
+    data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
     say("Configuration and Python dependencies: OK")
 
 
@@ -430,11 +449,6 @@ def status(config):
         ("api", "/health"),
         ("webui", "/health"),
     ]:
-        if name == "api" and config["mode"] == "company":
-            say(
-                "Demo API: disabled (company endpoints configured; use a real request to verify them)"
-            )
-            continue
         url = service_url(config, name)
         try:
             response = request(url + path)
@@ -465,7 +479,7 @@ def status(config):
         except (httpx.HTTPError, ValueError) as exc:
             healthy = False
             say(f"{name}: NOT READY  {url} ({exc})")
-    if config["blender_agent"]["enabled"] and config["mode"] == "demo":
+    if config["blender_agent"]["enabled"]:
         from adapters.operators import agent_status
 
         agent = agent_status()
@@ -474,7 +488,12 @@ def status(config):
         else:
             healthy = False
             say("blender-agent: NOT READY")
-    say(f'Mode: {config["mode"]}; model: {config["ollama"]["model"]}')
+    providers = ", ".join(
+        f'{name}={item["provider"]}' for name, item in config["workflow"].items()
+    )
+    say(
+        f'Profile: {config["profile"]}; model: {config["ollama"]["model"]}; providers: {providers}'
+    )
     say(
         f'Inputs: {data_path(config, "inputs")}\nOutputs: {data_path(config, "outputs")}\nLogs: {ROOT / "logs"}'
     )
@@ -518,22 +537,17 @@ def main():
         sync_webui(config)
         return 0
     if args.action in ("api", "restart-api"):
-        if config["mode"] != "demo":
-            raise RuntimeError("Demo API is disabled in company mode")
         if args.action == "restart-api":
             stop_service("api")
         ensure_service(config, "api")
         return 0
     ensure_ollama(config, pull=args.action == "install")
-    if config["mode"] == "demo":
-        ensure_service(config, "api")
-        if config["blender_agent"]["enabled"]:
-            from adapters.operators import ensure_agent
+    ensure_service(config, "api")
+    if config["blender_agent"]["enabled"]:
+        from adapters.operators import ensure_agent
 
-            agent = ensure_agent()
-            say(f'Blender Agent ready: pid={agent["pid"]}')
-    else:
-        stop_service("api")
+        agent = ensure_agent()
+        say(f'Blender Agent ready: pid={agent["pid"]}')
     ensure_service(config, "webui")
     sync_webui(config)
     say(

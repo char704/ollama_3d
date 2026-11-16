@@ -70,7 +70,10 @@ def health():
         "service": "excel-blender-demo-api",
         "version": "3.0.0",
         "project_root": str(ROOT),
-        "mode": CONFIG["mode"],
+        "profile": CONFIG["profile"],
+        "providers": {
+            name: item["provider"] for name, item in CONFIG["workflow"].items()
+        },
         "blender_available": BLENDER.is_file(),
         "blender_agent": agent_status(),
     }

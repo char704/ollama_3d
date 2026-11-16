@@ -14,6 +14,7 @@ ROUTES = {
     "apply": "/blender/apply-vbom",
     "result": "/results/{run_id}",
 }
+WORKFLOW_OPERATIONS = tuple(ROUTES)
 LOCAL_ROUTES = {
     "operators": "/blender/operators",
     "run_operator": "/blender/operators/run",
@@ -97,8 +98,17 @@ def _validate_blender_operators(config):
 def load(path=None):
     path = Path(path or CONFIG_FILE).resolve()
     config = json.loads(path.read_text(encoding="utf-8-sig"))
-    if config.get("mode") not in ("demo", "company"):
-        raise ValueError("config.json: mode must be demo or company")
+    profile = config.get("profile", "custom")
+    if not isinstance(profile, str) or not profile.strip():
+        raise ValueError("config.json: profile must be a non-empty string")
+    config["profile"] = profile.strip()
+    workflow = config.get("workflow")
+    if not isinstance(workflow, dict):
+        raise ValueError("config.json: workflow must be an object")
+    if set(workflow) != set(WORKFLOW_OPERATIONS):
+        raise ValueError(
+            "config.json: workflow must define files, export, apply and result"
+        )
     for key in ("api_port", "webui_port"):
         value = config["services"][key]
         if type(value) is not int or not 1024 <= value <= 65535:
@@ -136,9 +146,8 @@ def load(path=None):
         ):
             raise ValueError(f"config.json: paths.{key} is required")
     config["_root"] = path.parent
-    if config["mode"] == "company":
-        for operation in ROUTES:
-            endpoint(config, operation)
+    for operation in WORKFLOW_OPERATIONS:
+        endpoint(config, operation)
     return config
 
 
@@ -163,9 +172,18 @@ def endpoint(config, operation):
             "url": service_url(config, "api") + LOCAL_ROUTES[operation],
             "token_env": "",
         }
-    if config["mode"] == "demo":
+    if operation not in WORKFLOW_OPERATIONS:
+        raise ValueError("Unknown workflow operation: " + operation)
+    item = config["workflow"].get(operation, {})
+    if not isinstance(item, dict):
+        raise ValueError(f"config.json: workflow.{operation} must be an object")
+    provider = item.get("provider")
+    if provider == "local":
         return {"url": service_url(config, "api") + ROUTES[operation], "token_env": ""}
-    item = config["company_api"].get(operation, {})
+    if provider != "http":
+        raise ValueError(
+            f"config.json: workflow.{operation}.provider must be local or http"
+        )
     url = item.get("url", "")
     parsed = urlparse(url)
     if (
@@ -175,11 +193,16 @@ def endpoint(config, operation):
         or parsed.password
     ):
         raise ValueError(
-            f"config.json: company_api.{operation}.url must be an HTTP(S) URL without credentials"
+            f"config.json: workflow.{operation}.url must be an HTTP(S) URL without credentials"
         )
     if operation == "result" and "{run_id}" not in url:
-        raise ValueError("company_api.result.url must contain {run_id}")
-    return item
+        raise ValueError("workflow.result.url must contain {run_id}")
+    token_env = item.get("token_env", "")
+    if not isinstance(token_env, str):
+        raise ValueError(
+            f"config.json: workflow.{operation}.token_env must be a string"
+        )
+    return {"url": url, "token_env": token_env}
 
 
 def scoped_path(config, value, default=None):
