@@ -16,6 +16,34 @@
     "model": "qwen2.5:7b",
     "executable": ""
   },
+  "blender_operators": [
+    {
+      "id": "start_rhino_server",
+      "name": "Start Rhino Server",
+      "description": "Khởi động Rhino Server của công ty trong Blender khi người dùng yêu cầu kết nối hoặc sử dụng Rhino Server.",
+      "operator": "blender_rhino_server.start",
+      "enabled": true,
+      "execution_mode": "persistent",
+      "load_model": false,
+      "save_after": false,
+      "timeout_seconds": 30,
+      "parameters": {
+        "server_adr": {
+          "type": "string",
+          "description": "Địa chỉ server local.",
+          "default": "127.0.0.1",
+          "enum": ["127.0.0.1"]
+        },
+        "server_port": {
+          "type": "integer",
+          "description": "Cổng lắng nghe của Rhino Server.",
+          "default": 55555,
+          "minimum": 1024,
+          "maximum": 65535
+        }
+      }
+    }
+  ],
   "company_api": {
     "files": {"url": "", "token_env": ""},
     "export": {"url": "", "token_env": ""},

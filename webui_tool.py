@@ -2,7 +2,7 @@
 title: Excel to Blender
 author: Local prototype
 description: Configurable HTTP clients for Excel and Blender APIs.
-version: 2.1.0
+version: 2.2.0
 """
 import importlib.util
 import json
@@ -79,6 +79,24 @@ class Tools:
         :param open_window: True to open the result in Blender; false for background processing.
         """
         return await self._request('apply','POST',body={'vbom_path':vbom_path,'model_path':model_path,'open_window':open_window},emitter=__event_emitter__)
+
+    async def list_blender_addons(self, __event_emitter__=None) -> str:
+        """List the approved Blender add-ons/operators, what each one does, and its accepted parameters. Call this before choosing an optional company add-on."""
+        return await self._request('operators','GET',emitter=__event_emitter__)
+
+    async def run_blender_addon(self, operator_id: str, parameters_json: str = '{}', model_path: str = '', __event_emitter__=None) -> str:
+        """Run one approved Blender add-on/operator selected from list_blender_addons. Never invent an id or parameter.
+        :param operator_id: Exact id returned by list_blender_addons.
+        :param parameters_json: JSON object containing only the documented parameters, for example {"server_port":55555}. Use {} for defaults.
+        :param model_path: Blender model path only when the selected entry says load_model=true; otherwise leave empty.
+        """
+        try:
+            parameters = json.loads(parameters_json)
+            if not isinstance(parameters, dict):
+                raise ValueError('parameters_json must contain a JSON object')
+        except (json.JSONDecodeError, ValueError) as exc:
+            return json.dumps({'ok':False, 'error':str(exc)}, ensure_ascii=False)
+        return await self._request('run_operator','POST',body={'operator_id':operator_id,'parameters':parameters,'model_path':model_path},emitter=__event_emitter__)
 
     async def get_run_result(self, run_id: str, __event_emitter__=None) -> str:
         """Read previous export/apply status without running again. Use after timeouts.

@@ -77,6 +77,7 @@ Các thiết lập nằm trong **[config.json](config.json)**.
 | `services.ollama_url` | Địa chỉ Ollama trên máy; mặc định là `http://127.0.0.1:11434` |
 | `ollama.model` | Tên mô hình AI; mặc định là `qwen2.5:7b` |
 | `ollama.executable` | Đường dẫn đến Ollama; để trống để tự tìm |
+| `blender_operators` | Danh sách operator Blender mà Ollama được phép xem và gọi |
 | `company_api` | Địa chỉ và thiết lập xác thực cho từng API công ty |
 
 Ví dụ, để dùng dữ liệu trên ổ D, thay mục `paths` bằng:
@@ -179,9 +180,58 @@ Cách gọi cụ thể phụ thuộc API, macro hoặc operator mà công cụ c
 
 ## Thêm một add-on hoặc một bước xử lý mới
 
-Nếu add-on mới **luôn chạy cùng bước áp vật liệu**, thêm lệnh gọi trong `blender/apply_vbom.py`, trước khi lưu và kiểm chứng mô hình. Add-on phải được nạp trong tiến trình Blender trước khi gọi operator. Nếu bước mới thay đổi dữ liệu đầu ra, hãy cập nhật phần kiểm chứng tương ứng.
+Các operator tùy chọn được khai báo trong `blender_operators` của `config.json`. Ollama sử dụng hai công cụ chung:
 
-Nếu muốn **Ollama gọi bước mới như một công cụ riêng**, cần:
+1. `list_blender_addons` đọc danh sách operator được phép gọi, kèm mô tả và tham số.
+2. `run_blender_addon` nhận `id` đã chọn và chạy operator tương ứng.
+
+Ví dụ cấu hình Rhino Server:
+
+```json
+{
+  "id": "start_rhino_server",
+  "name": "Start Rhino Server",
+  "description": "Khởi động Rhino Server khi người dùng yêu cầu kết nối hoặc sử dụng Rhino Server.",
+  "operator": "blender_rhino_server.start",
+  "enabled": true,
+  "execution_mode": "persistent",
+  "load_model": false,
+  "save_after": false,
+  "timeout_seconds": 30,
+  "parameters": {
+    "server_adr": {
+      "type": "string",
+      "default": "127.0.0.1",
+      "enum": ["127.0.0.1"]
+    },
+    "server_port": {
+      "type": "integer",
+      "default": 55555,
+      "minimum": 1024,
+      "maximum": 65535
+    }
+  }
+}
+```
+
+`operator` là phần đứng sau `bpy.ops.`, nên `blender_rhino_server.start` sẽ gọi:
+
+```python
+bpy.ops.blender_rhino_server.start(
+    server_adr="127.0.0.1",
+    server_port=55555,
+)
+```
+
+Mô tả phải nói rõ operator dùng trong trường hợp nào để Ollama lựa chọn đúng. `parameters` giới hạn tên, kiểu và phạm vi giá trị được phép truyền. Mọi operator hoặc tham số không có trong danh sách đều bị API từ chối.
+
+Chọn `execution_mode: "persistent"` cho server hoặc operator cần giữ Blender tiếp tục chạy. Chế độ này mở một tiến trình Blender có giao diện và trả lại PID sau khi operator khởi động. Gọi lại cùng operator sẽ trả trạng thái `already_running` thay vì mở thêm tiến trình. Chọn `one_shot` cho tác vụ chạy xong rồi đóng Blender. Đặt `load_model: true` nếu operator cần mở file `.blend`, và `save_after: true` nếu cần lưu file sau khi chạy.
+
+Add-on phải được cài và bật trong profile Blender được chỉ định bởi `paths.blender_exe`. Trình chạy operator tùy chọn dùng profile Blender đó để các operator công ty được đăng ký. Nếu Blender không tìm thấy operator, xem `logs/operator-<id>.log`.
+
+Nếu add-on mới **luôn chạy cùng bước áp vật liệu**, bạn cũng có thể thêm trực tiếp lệnh gọi trong `blender/apply_vbom.py`, trước khi lưu và kiểm chứng mô hình. Cách này phù hợp khi operator là một phần bắt buộc của quy trình, không cần Ollama lựa chọn.
+
+Để thêm một operator có dạng `bpy.ops`, thông thường chỉ cần thêm một mục mới vào `blender_operators` rồi khởi động lại. Nếu bước mới cần quy trình riêng, xử lý file đặc biệt hoặc một API khác, cần:
 
 1. Thêm phần xử lý và endpoint trong `api_service.py`.
 2. Thêm phương thức gọi endpoint đó trong `webui_tool.py`, kèm mô tả tham số và kết quả.
@@ -205,7 +255,7 @@ Object | Material | ColorHex | Roughness | Metallic
 
 BOM gồm ba đối tượng `Upper`, `Sole`, `Laces`. Mỗi đối tượng xuất hiện một lần; màu dùng định dạng `#RRGGBB`; `Roughness` và `Metallic` nhận giá trị từ 0 đến 1. VBOM được xuất theo cấu trúc XML `demo-v1`.
 
-Demo đọc Excel bằng openpyxl. Add-on Blender mẫu được nạp tạm trong tiến trình nền và không xuất hiện trong Preferences của Blender. Vì Blender được mở với `--factory-startup`, add-on công ty có thể cần được nạp và cấu hình riêng trong script.
+Demo đọc Excel bằng openpyxl. Add-on Blender mẫu được nạp tạm trong tiến trình nền và không xuất hiện trong Preferences của Blender. Luồng áp VBOM mẫu chạy với `--factory-startup`. Trình chạy `blender_operators` không dùng tùy chọn này để có thể nạp các add-on đã bật trong profile Blender của công ty.
 
 API và Open WebUI chỉ lắng nghe trên máy local. Open WebUI hiện dùng chế độ một người dùng, không yêu cầu đăng nhập.
 
@@ -221,6 +271,7 @@ Chạy **Status.cmd** để kiểm tra dịch vụ. Với cấu hình mặc đ�
 |---|---|
 | `logs/api-error.log`, `logs/webui-error.log`, `logs/ollama-error.log` | Nhật ký lỗi của dịch vụ do launcher khởi động |
 | `logs/tool-calls.jsonl` | Các thao tác được API demo ghi nhận |
+| `logs/operator-<id>.log` | Nhật ký của operator Blender tùy chọn |
 | `runtime/results/<run_id>.json` | Trạng thái và kết quả của từng lượt chạy |
 | `<thư mục kết quả>/blender.log` | Nhật ký Blender của lượt đó |
 | `runtime/services.json` | Thông tin cấu hình dịch vụ; launcher tự quản lý |

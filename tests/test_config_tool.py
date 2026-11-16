@@ -12,6 +12,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from project_config import load, scoped_path, endpoint, data_path
 from webui_tool import Tools
+from adapters.operators import list_operators, run_operator
 
 
 class Configuration(unittest.TestCase):
@@ -43,6 +44,20 @@ class Configuration(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'different'):
                 load(path)
 
+    def test_operator_allowlist_and_parameter_validation(self):
+        listed = list_operators()['operators']
+        rhino = next(item for item in listed if item['id'] == 'start_rhino_server')
+        self.assertEqual(rhino['operator'], 'blender_rhino_server.start')
+        self.assertEqual(rhino['parameters']['server_port']['default'], 55555)
+        with self.assertRaisesRegex(ValueError, 'Unknown or disabled'):
+            run_operator('made_up_operator', {})
+        with self.assertRaisesRegex(ValueError, 'Unknown parameters'):
+            run_operator('start_rhino_server', {'shell_command':'bad'})
+        with self.assertRaisesRegex(ValueError, 'one of'):
+            run_operator('start_rhino_server', {'server_adr':'0.0.0.0'})
+        with self.assertRaisesRegex(ValueError, 'at most'):
+            run_operator('start_rhino_server', {'server_port':70000})
+
 
 class ToolRouting(unittest.IsolatedAsyncioTestCase):
     async def test_distinct_company_servers_and_defaults(self):
@@ -71,6 +86,23 @@ class ToolRouting(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Authorization', calls[2].headers)
         self.assertFalse(json.loads(calls[2].content)['open_window'])
         self.assertEqual(calls[3].url.path, '/jobs/company-job_42')
+
+    async def test_addon_tools_use_allowlist_api(self):
+        tool = Tools()
+        calls = []
+        real_client = httpx.AsyncClient
+        def handle(request):
+            calls.append(request)
+            return httpx.Response(200, json={'ok':True})
+        with patch('webui_tool.httpx.AsyncClient', side_effect=lambda **kw: real_client(transport=httpx.MockTransport(handle), **kw)):
+            self.assertTrue(json.loads(await tool.list_blender_addons())['ok'])
+            result = await tool.run_blender_addon('start_rhino_server', '{"server_port":55555}')
+            self.assertTrue(json.loads(result)['ok'])
+        self.assertEqual(calls[0].url.path, '/blender/operators')
+        self.assertEqual(calls[1].url.path, '/blender/operators/run')
+        self.assertEqual(json.loads(calls[1].content)['parameters'], {'server_port':55555})
+        invalid = json.loads(await tool.run_blender_addon('start_rhino_server', '[]'))
+        self.assertFalse(invalid['ok'])
 
     async def test_errors_and_timeout_are_not_success(self):
         tool = Tools()

@@ -210,9 +210,10 @@ def sync_webui(config):
     existing = api('/api/v1/tools/')
     route = f'/api/v1/tools/id/{TOOL_ID}/update' if any(t['id'] == TOOL_ID for t in existing) else '/api/v1/tools/create'
     registered = api(route, tool_body)
-    expected = {'list_demo_files', 'export_excel_to_vbom', 'apply_vbom_in_blender', 'get_run_result'}
+    expected = {'list_demo_files', 'export_excel_to_vbom', 'apply_vbom_in_blender',
+                'list_blender_addons', 'run_blender_addon', 'get_run_result'}
     if {s['name'] for s in registered.get('specs', [])} != expected:
-        raise RuntimeError('Registered tool schema differs from the four expected tools')
+        raise RuntimeError('Registered tool schema differs from the expected tools')
     system = (
         'Execute Excel-to-Blender requests using the supplied tools. First call list_demo_files, using the user input_dir or empty for the configured default. '
         'Select the exact requested Excel filename. If none was specified and multiple files are present, ask which one. '
@@ -220,6 +221,7 @@ def sync_webui(config):
         'Wait for ok=true, then call apply_vbom_in_blender with the exact returned vbom_path, the requested model_path or empty for the configured default. '
         'Use open_window=true unless the user requests background processing. Finish both export and apply when requested. '
         'Use get_run_result after a timeout; never invent paths, ignore errors, or report completion unless status=completed. '
+        'When the user asks for an optional company add-on or Rhino Server, first call list_blender_addons. Choose only an entry whose description matches the request, then call run_blender_addon using its exact id and documented parameters. Never invent operator ids or parameters. '
         'Include the actual output path. Respond briefly in Vietnamese. '
     )
     system += ('These are demo adapters and demo-v1 XML, not company plugins. Each run creates a unique output subfolder. '
@@ -234,7 +236,7 @@ def sync_webui(config):
     models = api('/api/v1/models/all')
     items = models if isinstance(models, list) else models.get('items', models.get('data', []))
     api('/api/v1/models/model/update?id=' + MODEL_ID if any(m['id'] == MODEL_ID for m in items) else '/api/v1/models/create', body)
-    say('Synced four tools and Excel -> Blender model in Open WebUI.')
+    say('Synced Excel, Blender and approved add-on tools in Open WebUI.')
 
 
 def check(config):
