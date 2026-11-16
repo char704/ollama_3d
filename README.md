@@ -56,7 +56,7 @@ oputs/<run_id>/
 | [Install.cmd](Install.cmd) | Cài đặt, tải mô hình AI còn thiếu và thiết lập công cụ |
 | [Open-WebUI.cmd](Open-WebUI.cmd) | Khởi động dịch vụ và cập nhật công cụ trong Open WebUI |
 | [Status.cmd](Status.cmd) | Kiểm tra dịch vụ, mô hình AI và thư mục đang sử dụng |
-| [Stop.cmd](Stop.cmd) | Dừng API và Open WebUI của project; giữ Ollama và các cửa sổ Blender đang mở |
+| [Stop.cmd](Stop.cmd) | Dừng API, Open WebUI và Blender Agent; giữ Ollama và các dịch vụ add-on chạy riêng |
 
 Nếu Blender đang xử lý, hãy đợi hoàn tất trước khi dừng hoặc khởi động lại project. Nếu một chương trình khác đang sử dụng cổng đã cấu hình, launcher sẽ báo lỗi để bạn đổi cổng.
 
@@ -117,6 +117,24 @@ Người dùng nhập yêu cầu trong Open WebUI
 Ollama quyết định bước cần thực hiện dựa trên mô tả công cụ và kết quả của bước trước. Open WebUI thực thi lời gọi công cụ, sau đó gửi kết quả về cho Ollama để tiếp tục quy trình hoặc trả lời người dùng.
 
 Trong demo, các API cùng chạy trong `api_service.py`. Phần đọc Excel nằm ở `adapters/excel.py`; phần mở Blender và theo dõi xử lý nằm ở `adapters/blender.py`. Script `blender/apply_vbom.py` chạy bên trong Blender để gọi add-on, lưu file và kiểm chứng kết quả.
+
+## Blender Agent và hàng đợi
+
+Các operator `one_shot` chạy trong một Blender Agent dùng chung. Agent được mở cùng project, lấy từng job theo thứ tự và thực thi `bpy.ops` trên luồng chính của Blender.
+
+```text
+Open WebUI + Ollama
+        ↓ chọn operator và tham số
+FastAPI → runtime/blender-agent/queue
+        ↓ từng job một
+Blender Agent → reset scene → bpy.ops → lưu kết quả → reset scene
+```
+
+Trước mỗi job, Agent mở file model được chỉ định hoặc template rỗng. Sau khi job hoàn tất hoặc thất bại, Agent mở lại template rỗng rồi mới nhận job kế tiếp. Kết quả mặc định nằm trong `oputs/agent/<job_id>/result.blend`. API `GET /blender/jobs/{job_id}` trả trạng thái `queued`, `running`, `completed`, `failed` hoặc `interrupted`.
+
+Agent dùng một thư mục `queue` riêng nên thời gian tìm job mới không tăng theo số lượng kết quả cũ. Heartbeat được ghi theo chu kỳ trong `config.json`. Khi code hoặc cấu hình Agent thay đổi, launcher nhận biết phiên bản và khởi động lại tiến trình Agent đang rảnh.
+
+Operator `persistent`, chẳng hạn Rhino Server, chạy trong tiến trình Blender riêng để việc reset scene của hàng đợi không ảnh hưởng vòng đời dịch vụ.
 
 ## Kết nối công cụ của công ty
 
@@ -225,7 +243,7 @@ bpy.ops.blender_rhino_server.start(
 
 Mô tả phải nói rõ operator dùng trong trường hợp nào để Ollama lựa chọn đúng. `parameters` giới hạn tên, kiểu và phạm vi giá trị được phép truyền. Mọi operator hoặc tham số không có trong danh sách đều bị API từ chối.
 
-Chọn `execution_mode: "persistent"` cho server hoặc operator cần giữ Blender tiếp tục chạy. Chế độ này mở một tiến trình Blender có giao diện và trả lại PID sau khi operator khởi động. Gọi lại cùng operator sẽ trả trạng thái `already_running` thay vì mở thêm tiến trình. Chọn `one_shot` cho tác vụ chạy xong rồi đóng Blender. Đặt `load_model: true` nếu operator cần mở file `.blend`, và `save_after: true` nếu cần lưu file sau khi chạy.
+Chọn `execution_mode: "persistent"` cho server hoặc operator cần giữ Blender tiếp tục chạy. Chế độ này mở một tiến trình Blender riêng và trả lại PID sau khi operator khởi động. Gọi lại cùng operator sẽ trả trạng thái `already_running` thay vì mở thêm tiến trình. Chọn `one_shot` để đưa tác vụ vào hàng đợi của Blender Agent dùng chung. Đặt `load_model: true` nếu operator cần mở file `.blend`, và `save_after: true` nếu cần lưu file sau khi chạy.
 
 Add-on phải được cài và bật trong profile Blender được chỉ định bởi `paths.blender_exe`. Trình chạy operator tùy chọn dùng profile Blender đó để các operator công ty được đăng ký. Nếu Blender không tìm thấy operator, xem `logs/operator-<id>.log`.
 
@@ -288,10 +306,12 @@ Chạy các lệnh sau từ thư mục project:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 .\Start-OpenWebUI.ps1 -NoBrowser
 .\.venv\Scripts\python.exe tests\smoke_api.py
+.\.venv\Scripts\python.exe tests\smoke_agent.py
 .\.venv\Scripts\python.exe tests\smoke_webui.py
+.\.venv\Scripts\python.exe tests\smoke_webui_agent.py
 ```
 
-Các bài kiểm tra bao gồm cấu hình và quyền truy cập đường dẫn, cách gọi API ở các địa chỉ khác nhau, xác thực và xử lý lỗi. Bài thử API sử dụng Blender thật để đối chiếu hai bộ màu với dữ liệu Excel. Bài thử WebUI tạo một cuộc chat thật để kiểm tra chuỗi gọi công cụ của Ollama.
+Các bài kiểm tra bao gồm cấu hình và quyền truy cập đường dẫn, cách gọi API ở các địa chỉ khác nhau, xác thực và xử lý lỗi. Bài thử Agent chạy cube và UV sphere trên cùng PID, kiểm tra thứ tự hàng đợi, reset scene, một job lỗi và job phục hồi tiếp theo. Bài thử WebUI Agent tạo chat thật để xác nhận Ollama tự chọn operator từ allowlist.
 
 Kết quả kiểm thử được lưu trong `evidence/`; các file Blender được tạo trong thư mục đầu ra đã cấu hình.
 
