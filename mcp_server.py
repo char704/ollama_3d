@@ -3,14 +3,23 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
+from adapters.common import REGISTRY
 
 from workflows.mcp_workflow import run_excel_to_blender as execute_workflow
+from workflows.mcp_workflow import create_colored_primitive as execute_primitive
 from workflows.mcp_workflow import system_status as read_system_status
 
 AUDIT_LOG = Path(__file__).resolve().parent / "logs" / "mcp-tool-calls.jsonl"
+PUBLIC_TOOLS = REGISTRY.public_tools()
+_IMPLEMENTED_TOOLS = ["system_status", "run_excel_to_blender", "create_colored_primitive"]
+if PUBLIC_TOOLS != _IMPLEMENTED_TOOLS:
+    raise RuntimeError(
+        "Enabled registry tools do not match MCP implementations: "
+        f"registry={PUBLIC_TOOLS}, implemented={_IMPLEMENTED_TOOLS}"
+    )
 
 
 def _audit(tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
@@ -22,7 +31,7 @@ def _audit(tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None
         "arguments": arguments,
         "result": {
             key: result.get(key)
-            for key in ("ready", "status", "run_id", "output_path")
+            for key in ("ready", "status", "run_id", "output_path", "primitive", "color_hex")
             if key in result
         },
     }
@@ -38,6 +47,8 @@ mcp = MCPServer(
         "Use system_status only for readiness or version questions. "
         "Use run_excel_to_blender only when the user explicitly requests processing and provides "
         "an absolute .xlsx path, an absolute .blend path, and an absolute output directory. "
+        "Use create_colored_primitive only when the user explicitly asks to create a cube, "
+        "UV sphere, or cylinder and provides an absolute output directory. "
         "Never invent paths and never report success unless status is completed."
     ),
 )
@@ -63,6 +74,27 @@ def run_excel_to_blender(
     }
     result = execute_workflow(**arguments)
     _audit("run_excel_to_blender", arguments, result)
+    return result
+
+
+@mcp.tool(structured_output=True)
+def create_colored_primitive(
+    primitive: Literal["cube", "uv_sphere", "cylinder"],
+    color_hex: str,
+    output_dir: str,
+    size: float = 2.0,
+    object_name: str = "QwenPrimitive",
+) -> dict[str, Any]:
+    """Create one colored Blender primitive through official Blender MCP, save it, reopen it, and verify it. Use only for an explicit request with an absolute output directory. color_hex must be #RRGGBB."""
+    arguments = {
+        "primitive": primitive,
+        "color_hex": color_hex,
+        "output_dir": output_dir,
+        "size": size,
+        "object_name": object_name,
+    }
+    result = execute_primitive(**arguments)
+    _audit("create_colored_primitive", arguments, result)
     return result
 
 

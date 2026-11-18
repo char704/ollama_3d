@@ -90,7 +90,13 @@ def state():
 
 
 def fingerprint(service):
-    paths = [CONFIG_FILE, ROOT / "manage.py", ROOT / "project_config.py"]
+    paths = [
+        CONFIG_FILE,
+        ROOT / "capabilities.json",
+        ROOT / "capability_registry.py",
+        ROOT / "manage.py",
+        ROOT / "project_config.py",
+    ]
     if service == "api":
         paths.extend(
             [
@@ -98,6 +104,7 @@ def fingerprint(service):
                 ROOT / "mcp_server.py",
                 *sorted((ROOT / "adapters").glob("*.py")),
                 *sorted((ROOT / "workflows").glob("*.py")),
+                ROOT / "blender/lab_mcp_runner.py",
                 *sorted((ROOT / "blender" / "ollama3d_proof_addon").glob("*.py")),
             ]
         )
@@ -297,11 +304,40 @@ def ensure_ollama(config, pull=False):
 
 
 def ensure_integrations(config):
-    from adapters.blender_proof import BlenderProofAdapter
+    from adapters.blender_mcp import BlenderMcpAdapter
     from adapters.excel_vba import ExcelVbaAdapter
 
     excel = ExcelVbaAdapter().status()
     say(f"Excel VBA ready: {excel['addin_version']} (macro callable)")
+    bridge = config["official_blender_mcp"]
+    bridge_package = resolve(config, bridge["package"])
+    if not bridge_package.is_file():
+        say(f"Downloading official Blender MCP {bridge['version']}...")
+        bridge_package.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            response = httpx.get(
+                bridge["download_url"],
+                follow_redirects=True,
+                timeout=60,
+                headers={"User-Agent": "Mozilla/5.0 Ollama3D-Installer/1.0"},
+            )
+            response.raise_for_status()
+            downloaded = response.content
+            if hashlib.sha256(downloaded).hexdigest() != bridge["sha256"]:
+                raise RuntimeError("downloaded package SHA-256 does not match")
+            temporary = bridge_package.with_suffix(".download")
+            temporary.write_bytes(downloaded)
+            temporary.replace(bridge_package)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not download official Blender MCP. Download it from "
+                f"{bridge['download_url']} and save it as {bridge_package}. Error: {exc}"
+            ) from exc
+    actual_hash = hashlib.sha256(bridge_package.read_bytes()).hexdigest()
+    if actual_hash != bridge["sha256"]:
+        raise RuntimeError(
+            f"Official Blender MCP {bridge['version']} package has an unexpected SHA-256"
+        )
     settings = config["blender_addon"]
     package = resolve(config, settings["package"])
     source = ROOT / "blender" / settings["module"]
@@ -316,7 +352,6 @@ def ensure_integrations(config):
         [
             str(data_path(config, "blender_exe")),
             "--background",
-            "--factory-startup",
             "--python-exit-code",
             "1",
             "--python",
@@ -330,16 +365,36 @@ def ensure_integrations(config):
         creationflags=FLAGS,
         timeout=settings["timeout_seconds"],
     )
+    # Install/reinstall last with -e. The legacy add-on installer saves Blender
+    # preferences, so this ordering guarantees the extension remains enabled.
+    subprocess.run(
+        [
+            str(data_path(config, "blender_exe")),
+            "--command",
+            "extension",
+            "install-file",
+            "-r",
+            "user_default",
+            "-e",
+            str(bridge_package),
+        ],
+        creationflags=FLAGS,
+        timeout=120,
+        check=True,
+    )
+    say(f"Official Blender MCP ready: {bridge['version']} (localhost only)")
     probe_directory = ROOT / "runtime/probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
-    blender = BlenderProofAdapter().status(probe_directory)
+    blender = BlenderMcpAdapter().status(probe_directory)
     say(
-        f"Blender add-on ready: {blender['addon_version']} "
+        f"Blender add-on ready through official MCP "
         f"(operator callable: {blender['operator']})"
     )
 
 
 def sync_webui(config):
+    from adapters.common import REGISTRY
+
     base = service_url(config, "webui")
     token = request(
         base + "/api/v1/auths/signin",
@@ -383,12 +438,12 @@ def sync_webui(config):
         "key": "",
         "config": {
             "enable": True,
-            "function_name_filter_list": "system_status,run_excel_to_blender",
+            "function_name_filter_list": ",".join(REGISTRY.public_tools()),
         },
         "info": {
             "id": server_id,
             "name": "Ollama3D MCP",
-            "description": "Real Excel VBA and Blender add-on workflow.",
+            "description": "Real Excel VBA and allowlisted Blender add-on workflow over official Blender MCP.",
         },
     }
     connections = [
@@ -397,10 +452,12 @@ def sync_webui(config):
     api("/api/v1/configs/tool_servers", {"TOOL_SERVER_CONNECTIONS": connections})
 
     system = (
-        "Bạn điều phối đúng hai MCP tool. Dùng system_status chỉ khi người dùng hỏi trạng thái, "
+        "Bạn điều phối đúng ba MCP tool. Dùng system_status chỉ khi người dùng hỏi trạng thái, "
         "phiên bản hoặc khả năng sẵn sàng. Dùng run_excel_to_blender chỉ khi người dùng yêu cầu "
         "chạy xử lý và cung cấp đủ ba đường dẫn tuyệt đối: excel_path (.xlsx), model_path (.blend), "
-        "output_dir. Nếu thiếu đường dẫn, hãy hỏi lại; không tự đoán. Không gọi tool cho câu hỏi "
+        "output_dir. Dùng create_colored_primitive khi người dùng yêu cầu tạo cube, UV sphere hoặc "
+        "cylinder có màu và đã cung cấp output_dir tuyệt đối. Nếu thiếu đường dẫn, hãy hỏi lại; "
+        "không tự đoán. Không gọi tool cho câu hỏi "
         "giải thích. Chỉ báo thành công khi status=completed và luôn nêu output_path. Trả lời ngắn gọn bằng tiếng Việt."
     )
     body = {
@@ -409,7 +466,7 @@ def sync_webui(config):
         "name": "Excel → Blender MCP",
         "meta": {
             "toolIds": ["server:mcp:" + server_id],
-            "description": "Qwen with two local MCP tools backed by real VBA and Blender add-on code.",
+            "description": "Qwen with registry-controlled local MCP tools backed by real VBA and official Blender MCP.",
             "capabilities": {
                 key: False
                 for key in (
@@ -441,12 +498,15 @@ def sync_webui(config):
     )
     api(route, body)
     specs = api(f"/api/v1/tools/id/server:mcp:{server_id}/specs")["specs"]
-    if [item["name"] for item in specs] != ["system_status", "run_excel_to_blender"]:
-        raise RuntimeError("Open WebUI MCP schema differs from the expected two tools")
-    say("Synced the two-tool MCP model and removed legacy Open WebUI entries.")
+    expected_tools = REGISTRY.public_tools()
+    if [item["name"] for item in specs] != expected_tools:
+        raise RuntimeError("Open WebUI MCP schema differs from the expected three tools")
+    say("Synced the three-tool MCP model and removed legacy Open WebUI entries.")
 
 
 def check(config):
+    from capability_registry import load_registry
+
     for line in (ROOT / "requirements.txt").read_text().splitlines():
         if not line or line.startswith("#"):
             continue
@@ -460,11 +520,20 @@ def check(config):
         "Blender executable": data_path(config, "blender_exe"),
         "Excel executable": Path(config["excel_vba"]["executable"]),
         "Excel VBA add-in": resolve(config, config["excel_vba"]["addin_path"]),
+        "Capability registry": resolve(config, config["capability_registry"]),
         "Blender add-on source": ROOT / "blender" / config["blender_addon"]["module"] / "__init__.py",
+        "Blender MCP trusted runner": ROOT / "blender/lab_mcp_runner.py",
     }
     for label, path in required.items():
         if not path.exists():
             raise FileNotFoundError(f"{label} does not exist: {path}")
+    registry = load_registry(resolve(config, config["capability_registry"]))
+    if registry.public_tools() != [
+        "system_status",
+        "run_excel_to_blender",
+        "create_colored_primitive",
+    ]:
+        raise RuntimeError("Capability registry public tools do not match this release")
     data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
     say("Configuration, dependencies, and integration files: OK")
 
@@ -499,7 +568,7 @@ def status(config):
         except (httpx.HTTPError, ValueError) as exc:
             healthy = False
             say(f"{name}: NOT READY  {url} ({exc})")
-    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: 2")
+    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: 3")
     say(f"Inputs: {data_path(config, 'inputs')}\nOutputs: {data_path(config, 'outputs')}")
     return 0 if healthy else 1
 

@@ -77,6 +77,11 @@ def main():
                 "Chạy xử lý thật với excel_path='{}', model_path='{}', output_dir='{}'.",
                 "run_excel_to_blender",
             ),
+            (
+                "colored_cube",
+                "Tạo một cube màu tím #7C3AED, kích thước 2.5, tên QwenPurpleCube và lưu vào output_dir='{}'.",
+                "create_colored_primitive",
+            ),
         ]
         excel = (ROOT / "inputs" / "Footwear_BOM.xlsx").resolve()
         model = (ROOT / "inputs" / "Sneaker_Unassigned.blend").resolve()
@@ -85,6 +90,8 @@ def main():
         for name, prompt, expected in cases:
             if name == "processing":
                 prompt = prompt.format(excel, model, output)
+            if name == "colored_cube":
+                prompt = prompt.format(output)
             before = audit_records()
             request, response_text = send_chat(client, prompt)
             after = audit_records()
@@ -99,6 +106,12 @@ def main():
             if name == "processing":
                 result = new_calls[0]["result"]
                 assert result["status"] == "completed"
+                assert Path(result["output_path"]).is_file()
+            if name == "colored_cube":
+                result = new_calls[0]["result"]
+                assert result["status"] == "completed"
+                assert result["primitive"] == "cube"
+                assert result["color_hex"] == "#7C3AED"
                 assert Path(result["output_path"]).is_file()
             evidence.append(
                 {

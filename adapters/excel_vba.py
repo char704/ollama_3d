@@ -8,7 +8,7 @@ from pathlib import Path
 
 import psutil
 
-from .common import CONFIG, ROOT, read_json
+from .common import CONFIG, REGISTRY, ROOT, read_json
 from project_config import resolve
 
 
@@ -17,8 +17,12 @@ class ExcelVbaAdapter:
         settings = CONFIG["excel_vba"]
         self.executable = Path(settings["executable"])
         self.addin_path = resolve(CONFIG, settings["addin_path"])
-        self.ping_macro = settings["ping_macro"]
-        self.export_macro = settings["export_macro"]
+        self.ping_macro = REGISTRY.require(
+            "excel.ping", provider="excel_vba", handler="ping"
+        )["target"]
+        self.export_macro = REGISTRY.require(
+            "excel.export_vbom", provider="excel_vba", handler="export_vbom"
+        )["target"]
         self.timeout = settings["timeout_seconds"]
 
     @staticmethod

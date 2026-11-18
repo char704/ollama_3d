@@ -3,14 +3,15 @@
 import datetime
 import hashlib
 import json
+import re
 import threading
 import uuid
 from pathlib import Path
 
 import httpx
 
-from adapters.blender_proof import BlenderProofAdapter
-from adapters.common import CONFIG, ROOT, log, write_json
+from adapters.blender_mcp import BlenderMcpAdapter
+from adapters.common import CONFIG, REGISTRY, ROOT, log, write_json
 from adapters.excel_vba import ExcelVbaAdapter
 from project_config import data_path, scoped_path, service_url
 
@@ -26,12 +27,17 @@ def _failure(code, message):
 
 
 def system_status():
+    REGISTRY.require("system.status", provider="system", handler="system_status")
     probe_directory = ROOT / "runtime" / "probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
     status = {
         "ok": True,
         "ready": False,
-        "service": {"mcp_path": CONFIG["mcp"]["path"], "profile": CONFIG["profile"]},
+        "service": {
+            "mcp_path": CONFIG["mcp"]["path"],
+            "profile": CONFIG["profile"],
+            "registry": REGISTRY.summary(),
+        },
     }
     try:
         response = httpx.get(service_url(CONFIG, "ollama") + "/api/tags", timeout=10, trust_env=False)
@@ -46,13 +52,14 @@ def system_status():
     except Exception as exc:
         status["excel"] = _failure("EXCEL_NOT_READY", str(exc))
     try:
-        status["blender"] = BlenderProofAdapter().status(probe_directory)
+        status["blender"] = BlenderMcpAdapter().status(probe_directory)
     except Exception as exc:
         status["blender"] = _failure("BLENDER_NOT_READY", str(exc))
     status["ready"] = bool(
         status["qwen"].get("available")
         and status["excel"].get("macro_callable")
         and status["blender"].get("operator_callable")
+        and status["blender"].get("official_mcp_callable")
     )
     status["ok"] = status["ready"]
     log("mcp_system_status", {"result": status})
@@ -60,6 +67,9 @@ def system_status():
 
 
 def run_excel_to_blender(excel_path, model_path, output_dir):
+    REGISTRY.require(
+        "workflow.excel_to_blender", provider="workflow", handler="run_excel_to_blender"
+    )
     excel_path = scoped_path(CONFIG, excel_path)
     model_path = scoped_path(CONFIG, model_path)
     output_dir = scoped_path(CONFIG, output_dir, data_path(CONFIG, "outputs"))
@@ -98,7 +108,7 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
         write_json(state_path, state)
         output_path = run_directory / "result.blend"
         blender_proof = run_directory / "blender-proof.json"
-        applied = BlenderProofAdapter().apply(
+        applied = BlenderMcpAdapter().apply(
             exported["vbom_path"], model_path, output_path, blender_proof, run_id
         )
         state["steps"].append({"id": state["current_step"], "status": "completed", "result": applied})
@@ -107,6 +117,7 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
             "run_id": run_id,
             "excel_producer": exported["producer"],
             "blender_producer": applied["producer"],
+            "blender_transport": applied["transport"],
             "source_sha256": exported["source_sha256"],
             "vbom_sha256": exported["vbom_sha256"],
             "output_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
@@ -143,3 +154,55 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
         _workflow_lock.release()
     log("mcp_run_excel_to_blender", {"arguments": state["input"], "result": state})
     return state
+
+
+def create_colored_primitive(primitive, color_hex, output_dir, size=2.0, object_name="QwenPrimitive"):
+    capability = REGISTRY.require(
+        "blender.create_colored_primitive",
+        provider="blender_builtin",
+        handler="create_colored_primitive",
+    )
+    settings = capability["settings"]
+    allowed = settings["primitives"]
+    if primitive not in allowed:
+        raise ValueError("primitive must be one of: " + ", ".join(allowed))
+    if not isinstance(color_hex, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", color_hex):
+        raise ValueError("color_hex must use the #RRGGBB format")
+    color_hex = color_hex.upper()
+    minimum = settings["minimum_size"]
+    maximum = settings["maximum_size"]
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or not minimum <= size <= maximum:
+        raise ValueError(f"size must be a number from {minimum} through {maximum}")
+    if not isinstance(object_name, str) or not re.fullmatch(r"[A-Za-z0-9 _.-]{1,64}", object_name):
+        raise ValueError("object_name may contain letters, numbers, spaces, dot, dash, and underscore")
+
+    output_dir = scoped_path(CONFIG, output_dir, data_path(CONFIG, "outputs"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex
+    run_directory = output_dir / run_id
+    run_directory.mkdir()
+    output_path = run_directory / f"{primitive}.blend"
+    report_path = run_directory / "primitive-proof.json"
+    result = BlenderMcpAdapter().create_colored_primitive(
+        primitive,
+        color_hex,
+        float(size),
+        object_name,
+        output_path,
+        report_path,
+        run_id,
+    )
+    log(
+        "mcp_create_colored_primitive",
+        {
+            "arguments": {
+                "primitive": primitive,
+                "color_hex": color_hex,
+                "output_dir": str(output_dir),
+                "size": float(size),
+                "object_name": object_name,
+            },
+            "result": result,
+        },
+    )
+    return result

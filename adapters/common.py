@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 
 from project_config import load, resolve, scoped_path as configured_path
+from capability_registry import load_registry
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = load()
 BLENDER = resolve(CONFIG, CONFIG["paths"]["blender_exe"])
+REGISTRY = load_registry(resolve(CONFIG, CONFIG["capability_registry"]))
 
 
 def scoped_path(value, default=None):

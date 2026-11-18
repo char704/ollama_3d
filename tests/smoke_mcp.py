@@ -12,7 +12,7 @@ async def main():
     async with Client("http://127.0.0.1:8090/mcp") as client:
         tools = await client.list_tools()
         names = [tool.name for tool in tools.tools]
-        assert names == ["system_status", "run_excel_to_blender"], names
+        assert names == ["system_status", "run_excel_to_blender", "create_colored_primitive"], names
         status = await client.call_tool("system_status", {})
         status_payload = status.structured_content
         print(f"tools={names}; ready={status_payload['ready']}")
@@ -33,6 +33,25 @@ async def main():
         )
         assert payload["status"] == "completed"
         assert Path(payload["output_path"]).is_file()
+
+        primitive = await client.call_tool(
+            "create_colored_primitive",
+            {
+                "primitive": "cube",
+                "color_hex": "#7C3AED",
+                "output_dir": str((ROOT / "outputs").resolve()),
+                "size": 2.5,
+                "object_name": "QwenPurpleCube",
+            },
+        )
+        primitive_payload = primitive.structured_content
+        print(
+            f"primitive={primitive_payload['primitive']}; color={primitive_payload['color_hex']}; "
+            f"output={primitive_payload['output_path']}"
+        )
+        assert primitive_payload["status"] == "completed"
+        assert primitive_payload["verified_after_reopen"] is True
+        assert Path(primitive_payload["output_path"]).is_file()
 
 
 if __name__ == "__main__":
