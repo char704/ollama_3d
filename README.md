@@ -1,174 +1,97 @@
-# Ollama 3D — Excel Add-in → VBOM → Blender Add-on
+# Ollama3D MCP — Qwen → Excel VBA → Blender add-on
 
-## Trạng thái hiện tại
+Project này cung cấp một MCP server local với đúng hai tool:
 
-Project đã có workflow và tool gọi từ Open WebUI, nhưng phần tích hợp thật vẫn chưa hoàn tất:
+- `system_status()` kiểm tra Qwen, macro VBA thật và Blender operator thật.
+- `run_excel_to_blender(excel_path, model_path, output_dir)` chạy trọn workflow và kiểm chứng file `.blend` sau khi mở lại.
 
-- `adapters/excel.py` hiện dùng `openpyxl` để tự sinh VBOM. **Chưa gọi Excel add-in.**
-- `blender/apply_vbom.py` hiện gọi add-on Blender demo. **Chưa gọi add-on công ty.**
-
-Muốn chạy production phải thay đúng hai adapter này bằng lệnh của add-in/add-on thật.
-
-## Tool được gọi như thế nào
-
-Với yêu cầu Excel → Blender, Ollama chỉ gọi **một tool**:
+Qwen chỉ chọn tool. Python giữ workflow cố định để tránh chọn nhầm add-in/add-on:
 
 ```text
-run_bom_pipeline(excel_path, model_path, output_dir, open_result)
+Qwen (Open WebUI)
+  → MCP http://127.0.0.1:8090/mcp
+  → Excel COM gọi 'Ollama3DProof.xlam'!ExportVBOM
+  → Blender background gọi bpy.ops.ollama3d_proof.apply_vbom
+  → kiểm chứng và lưu result.blend
 ```
 
-Luồng thực thi:
+## Cài đặt
 
-```text
-Open WebUI
-  → webui_tool.py: run_bom_pipeline
-  → POST /workflows/bom
-  → workflows/bom_pipeline.py
-      1. adapters/excel.py     → gọi Excel add-in → xuất VBOM
-      2. adapters/blender.py   → mở Blender
-      3. blender/apply_vbom.py → gọi Blender add-on → lưu và kiểm tra file
-```
-
-Không cần để Ollama tự gọi từng bước Excel và Blender. Python workflow chịu trách nhiệm chạy đúng thứ tự, timeout, trạng thái và kiểm chứng kết quả.
-
-`tool-library/blender/*.json` chỉ dành cho các operator Blender chạy độc lập. Không sửa thư mục này để thay bước Excel → VBOM của workflow chính.
-
-## 1. Cài đặt
+Yêu cầu Windows 10/11, Microsoft Excel đã cài, Blender và Ollama. Sau đó chạy:
 
 ```powershell
-git clone https://github.com/char704/ollama_3d.git
-cd ollama_3d
 .\Install.cmd
+```
+
+Installer thực hiện và kiểm tra từng phần:
+
+1. tạo Python 3.12 virtual environment và cài dependency đã khóa phiên bản;
+2. mở Excel thật, nạp file `excel/Ollama3DProof.xlam`, gọi macro ping;
+3. đóng gói, cài và bật `ollama3d_proof_addon` trong đúng Blender profile;
+4. dùng `OLLAMA_MODELS` trong `config.json` và kiểm tra model Qwen;
+5. khởi động local API/MCP và Open WebUI;
+6. đăng ký model **Excel → Blender MCP** chỉ với hai MCP tool.
+
+Installer không bật “Trust access to the VBA project object model” và không sửa Excel Trust Center. File `.xlam` đã được build sẵn; runtime chỉ mở add-in và gọi macro công khai.
+
+Các lần sau dùng:
+
+```powershell
 .\Open-WebUI.cmd
 ```
 
-Mở <http://127.0.0.1:8080>, chọn **Excel → Blender Demo** và tạo chat mới.
+Mở <http://127.0.0.1:8080>, chọn **Excel → Blender MCP**.
 
-## 2. Yêu cầu
+## Cấu hình máy
 
-- Windows 10/11.
-- WinGet và Internet trong lần cài đầu.
-- Excel cùng add-in xuất VBOM đã được cài và bật.
-- Blender cùng add-on cần gọi đã được cài và bật.
-- Quyền cài Ollama, Blender và Python 3.12.
-
-## 3. Sau khi cài cần sửa gì
-
-Sửa `config.json`:
+Các đường dẫn cần đúng trong `config.json`:
 
 ```json
-"paths": {
-  "inputs": "D:/BOM",
-  "outputs": "D:/KetQua",
-  "default_model": "D:/Models/product.blend",
-  "blender_exe": "C:/Program Files/Blender Foundation/Blender 4.3/blender.exe",
-  "allowed_roots": []
+{
+  "paths": {
+    "default_model": "inputs/Sneaker_Unassigned.blend",
+    "blender_exe": "E:/Blender/blender.exe"
+  },
+  "ollama": {
+    "model": "qwen3:8b",
+    "executable": "E:/3d/Ollama/app/ollama.exe",
+    "models_directory": "E:/3d/Ollama/models"
+  },
+  "excel_vba": {
+    "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
+    "addin_path": "excel/Ollama3DProof.xlam"
+  }
 }
 ```
 
-- `inputs`: thư mục Excel và model đầu vào.
-- `outputs`: nơi lưu VBOM và file Blender kết quả.
-- `default_model`: model mặc định.
-- `blender_exe`: đúng file `blender.exe` đang có add-on công ty.
-- `allowed_roots`: thêm thư mục ngoài project nếu workflow cần truy cập.
+Đường dẫn truyền cho `run_excel_to_blender` phải là đường dẫn tuyệt đối và nằm trong project hoặc `paths.allowed_roots`.
 
-Sau khi sửa:
+## Kiểm tra theo giai đoạn
 
 ```powershell
-.\Stop.cmd
-.\Open-WebUI.cmd
-```
+# Cấu hình, dependency và file integration
+.\.venv\Scripts\python.exe manage.py check
 
-## 4. Thay lệnh Excel add-in và Blender add-on
-
-### Excel add-in
-
-Vị trí phải thay: `adapters/excel.py`, hàm `export_excel()`.
-
-Hàm này phải thực hiện đúng workflow:
-
-```text
-mở workbook đầu vào
-→ gọi chức năng Export VBOM của add-in
-→ chờ add-in chạy xong
-→ kiểm tra file VBOM tồn tại
-→ trả về run_id và vbom_path
-```
-
-Để viết được lệnh gọi thật, cần lấy **automation entry point** của add-in:
-
-| Loại add-in | Thông tin cần lấy |
-|---|---|
-| VBA / `.xlam` | Tên macro đầy đủ, ví dụ `'Addin.xlam'!Module.ExportVBOM` |
-| COM / VSTO add-in | `ProgID`, method công khai và danh sách tham số |
-| Add-in có CLI/API | File `.exe` hoặc URL, tham số input/output và cách đọc kết quả |
-| Chỉ có nút trên Ribbon | Cần đội viết add-in cung cấp API/macro; tên nút không phải lệnh gọi |
-
-Cách xác định loại add-in: mở Excel → **File → Options → Add-ins**. Sau đó lấy tài liệu automation hoặc hỏi đội phát triển add-in. Chỉ biết đường dẫn `EXCEL.EXE` là chưa đủ để gọi chức năng Export.
-
-Khi có entry point, thay đoạn `openpyxl` trong `export_excel()` bằng bridge tương ứng:
-
-- VBA/COM: gọi Excel qua `pywin32`.
-- CLI: gọi bằng `subprocess.run()`.
-- HTTP API: gọi endpoint từ adapter hoặc đổi `workflow.export.provider` sang `http`.
-
-Không giữ đoạn tự tạo XML hiện tại khi chuyển sang add-in thật. VBOM phải là file do add-in xuất ra.
-
-### Blender add-on
-
-Đường dẫn Blender nằm ở:
-
-```text
-config.json → paths.blender_exe
-```
-
-Lệnh mở Blender nằm trong `adapters/blender.py`, biến `command` của `apply_vbom()`:
-
-```text
-blender.exe --background model.blend
-  --python blender/apply_vbom.py
-  -- materials.vbom output.blend verification.json
-```
-
-Operator được gọi trong `blender/apply_vbom.py`. Thay operator demo:
-
-```python
-bpy.ops.demo.import_vbom(filepath=vbom)
-```
-
-bằng operator thật do add-on công ty cung cấp:
-
-```python
-bpy.ops.<module>.<operator>(filepath=vbom)
-```
-
-Tên chính xác lấy từ source hoặc tài liệu add-on Blender. Add-on phải được bật trong đúng Blender profile mà `paths.blender_exe` đang sử dụng.
-
-## 5. Kiểm tra project đã cập nhật chưa
-
-```powershell
-git fetch origin
-git status --short --branch
-git log --oneline origin/main..HEAD
-git log --oneline HEAD..origin/main
-```
-
-Project đã đồng bộ khi `git status` không có file thay đổi, branch không `ahead/behind` và hai lệnh `git log` không trả kết quả.
-
-Kiểm tra code sau khi cài:
-
-```powershell
+# Unit/integration contract tests
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+
+# MCP protocol gọi Excel VBA và Blender add-on thật
+.\.venv\Scripts\python.exe tests\smoke_mcp.py
+
+# Qwen chọn đúng tool, không gọi tool khi không cần, và chạy workflow thật
+.\.venv\Scripts\python.exe tests\smoke_webui_mcp.py
+
+# Trạng thái dịch vụ
 .\Status.cmd
 ```
 
-## Thông tin còn thiếu để nối add-in thật
+Chứng cứ của bài test Qwen được lưu tại `evidence/webui-mcp-smoke.json`; mỗi workflow tạo thư mục riêng trong `outputs/<run_id>/` gồm proof từ Excel, proof từ Blender, verification và `result.blend`.
 
-Cần cung cấp bốn thông tin sau:
+## Quy tắc chọn tool
 
-1. Tên và loại Excel add-in.
-2. Macro, `ProgID` + method, CLI hoặc API dùng để Export VBOM.
-3. Tham số đầu vào/đầu ra của lệnh Export.
-4. Tên `bpy.ops...` của Blender add-on.
+- Hỏi trạng thái/phiên bản/sẵn sàng → `system_status`.
+- Yêu cầu xử lý và có đủ ba đường dẫn tuyệt đối → `run_excel_to_blender`.
+- Thiếu đường dẫn → Qwen phải hỏi lại, không tự đoán.
+- Câu hỏi giải thích → không gọi tool.
 
-Khi chưa có bốn thông tin này, project chỉ chạy được workflow demo sinh VBOM bằng code.
+Blender add-on không được đưa trực tiếp thành hàng loạt tool cho LLM. MCP chỉ công bố workflow cấp cao nên add-on trùng tên hoặc operator khác không thể bị Qwen gọi nhầm.

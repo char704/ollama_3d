@@ -6,5 +6,7 @@
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.xlsx binary
+*.xlam binary
+*.bas text eol=crlf
 *.blend binary
 *.png binary

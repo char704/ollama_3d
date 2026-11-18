@@ -1,8 +1,8 @@
 {
-  "profile": "demo",
+  "profile": "mcp-proof",
   "paths": {
     "inputs": "inputs",
-    "outputs": "oputs",
+    "outputs": "outputs",
     "default_model": "inputs/Sneaker_Unassigned.blend",
     "blender_exe": "E:/Blender/blender.exe",
     "allowed_roots": []
@@ -13,26 +13,28 @@
     "ollama_url": "http://127.0.0.1:11434"
   },
   "ollama": {
-    "model": "qwen2.5:7b",
-    "executable": ""
+    "model": "qwen3:8b",
+    "executable": "E:/3d/Ollama/app/ollama.exe",
+    "models_directory": "E:/3d/Ollama/models"
   },
-  "blender_agent": {
-    "enabled": true,
-    "startup_timeout_seconds": 60,
-    "job_timeout_seconds": 120,
-    "poll_interval_seconds": 0.2,
-    "heartbeat_interval_seconds": 1.0,
-    "hung_grace_seconds": 15,
-    "max_queued_jobs": 25,
-    "auto_restart_hung": true
+  "mcp": {
+    "path": "/mcp",
+    "server_id": "ollama3d"
   },
-  "tool_library": {
-    "directory": "tool-library"
+  "excel_vba": {
+    "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
+    "addin_path": "excel/Ollama3DProof.xlam",
+    "ping_macro": "'Ollama3DProof.xlam'!Ollama3D_Ping",
+    "export_macro": "'Ollama3DProof.xlam'!ExportVBOM",
+    "timeout_seconds": 90
+  },
+  "blender_addon": {
+    "module": "ollama3d_proof_addon",
+    "operator": "ollama3d_proof.apply_vbom",
+    "package": "dist/ollama3d_proof_addon.zip",
+    "timeout_seconds": 180
   },
   "workflow": {
-    "files": {"provider": "local"},
-    "export": {"provider": "local"},
-    "apply": {"provider": "local"},
-    "result": {"provider": "local"}
+    "max_concurrent_runs": 1
   }
 }

@@ -1,4 +1,4 @@
-"""Windows lifecycle and WebUI registration. Run via the .cmd entry points."""
+"""Windows lifecycle, integration installation, and Open WebUI MCP registration."""
 
 import argparse
 import hashlib
@@ -10,27 +10,30 @@ import subprocess
 import sys
 import time
 import webbrowser
+import zipfile
 from pathlib import Path
 
 import httpx
 import psutil
-from project_config import ROOT, CONFIG_FILE, load, resolve, data_path, service_url
+
+from project_config import CONFIG_FILE, ROOT, data_path, load, resolve, service_url
 
 PYTHON = ROOT / ".venv/Scripts/python.exe"
 STATE = ROOT / "runtime/services.json"
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-MODEL_ID = "excel-blender-demo"
-TOOL_ID = "excel_blender_demo"
+MODEL_ID = "excel-blender-mcp-proof"
+LEGACY_MODEL_ID = "excel-blender-demo"
+LEGACY_TOOL_ID = "excel_blender_demo"
 
 
 def say(message):
     print(message, flush=True)
 
 
-def request(url, body=None, token=None, timeout=5):
+def request(url, body=None, token=None, timeout=5, method=None):
     with httpx.Client(timeout=timeout, trust_env=False) as client:
         response = client.request(
-            "GET" if body is None else "POST",
+            method or ("GET" if body is None else "POST"),
             url,
             json=body,
             headers={"Authorization": "Bearer " + token} if token else {},
@@ -41,23 +44,19 @@ def request(url, body=None, token=None, timeout=5):
 
 def owned(service):
     result = []
-    for process in psutil.process_iter(["exe", "cmdline", "cwd"]):
+    for process in psutil.process_iter(["cmdline", "cwd"]):
         try:
             info = process.info
-            if not info["exe"] or not Path(info["exe"]).resolve().is_relative_to(ROOT):
+            if not info["cwd"] or Path(info["cwd"]).resolve() != ROOT:
                 continue
-            args = info["cmdline"] or []
+            arguments = info["cmdline"] or []
             if service == "api":
-                match = (
-                    "uvicorn" in args
-                    and "api_service:app" in args
-                    and Path(info["cwd"]).resolve() == ROOT
-                )
+                match = "uvicorn" in " ".join(arguments) and "api_service:app" in arguments
             else:
-                match = (
-                    any(Path(a).name.lower() == "open-webui.exe" for a in args)
-                    and "serve" in args
-                )
+                match = any(
+                    Path(argument).name.casefold() == "open-webui.exe"
+                    for argument in arguments
+                ) and "serve" in arguments
             if match:
                 result.append(process)
         except (psutil.Error, OSError, TypeError):
@@ -65,20 +64,8 @@ def owned(service):
     return result
 
 
-def assert_idle():
-    script = str(ROOT / "blender/apply_vbom.py").casefold()
-    for process in psutil.process_iter(["cmdline"]):
-        if any(a.casefold() == script for a in (process.info["cmdline"] or [])):
-            raise RuntimeError(
-                "Blender is processing a run. Wait for completion before stopping/restarting."
-            )
-
-
 def stop_service(service):
     processes = owned(service)
-    if not processes:
-        return
-    assert_idle()
     for process in reversed(processes):
         try:
             process.terminate()
@@ -86,10 +73,9 @@ def stop_service(service):
             pass
     _, alive = psutil.wait_procs(processes, timeout=10)
     if alive:
-        raise RuntimeError(
-            f"{service} did not stop; inspect Status.cmd and logs before retrying"
-        )
-    say(f"Stopped {service}.")
+        raise RuntimeError(f"{service} did not stop; inspect logs before retrying")
+    if processes:
+        say(f"Stopped {service}.")
 
 
 def port_owner(port):
@@ -104,38 +90,32 @@ def state():
 
 
 def fingerprint(service):
-    paths = [
-        CONFIG_FILE,
-        ROOT / "manage.py",
-        ROOT / "project_config.py",
-        ROOT / "tool_registry.py",
-        ROOT / "webui_tool.py",
-        *sorted((ROOT / "tool-library").rglob("*.json")),
-    ]
+    paths = [CONFIG_FILE, ROOT / "manage.py", ROOT / "project_config.py"]
     if service == "api":
-        paths += [
-            ROOT / "api_service.py",
-            ROOT / "contracts.py",
-            *sorted((ROOT / "adapters").glob("*.py")),
-            *sorted((ROOT / "workflows").rglob("*.py")),
-            *sorted((ROOT / "workflows" / "definitions").glob("*.json")),
-            *sorted((ROOT / "schemas").glob("*.json")),
-        ]
-    return hashlib.sha256(b"".join(p.read_bytes() for p in paths)).hexdigest()
+        paths.extend(
+            [
+                ROOT / "api_service.py",
+                ROOT / "mcp_server.py",
+                *sorted((ROOT / "adapters").glob("*.py")),
+                *sorted((ROOT / "workflows").glob("*.py")),
+                *sorted((ROOT / "blender" / "ollama3d_proof_addon").glob("*.py")),
+            ]
+        )
+    return hashlib.sha256(b"".join(path.read_bytes() for path in paths)).hexdigest()
 
 
 def save_state(service):
     value = state()
     value[service] = {
         "fingerprint": fingerprint(service),
-        "pids": [p.pid for p in owned(service)],
+        "pids": [process.pid for process in owned(service)],
     }
     STATE.parent.mkdir(exist_ok=True)
     STATE.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
 def environment(config):
-    return {
+    result = {
         **os.environ,
         "DATA_DIR": str(ROOT / "webui-data"),
         "OLLAMA_BASE_URL": service_url(config, "ollama"),
@@ -153,29 +133,31 @@ def environment(config):
         "DEFAULT_MODELS": MODEL_ID,
         "PYTHONIOENCODING": "utf-8",
         "SCARF_NO_ANALYTICS": "true",
+        "OLLAMA_MODELS": str(resolve(config, config["ollama"]["models_directory"])),
     }
+    return result
 
 
 def launch(command, name, env):
     logs = ROOT / "logs"
     logs.mkdir(exist_ok=True)
-    with (logs / (name + ".log")).open("a", encoding="utf-8") as out, (
-        logs / (name + "-error.log")
-    ).open("a", encoding="utf-8") as err:
+    with (logs / f"{name}.log").open("a", encoding="utf-8") as output, (
+        logs / f"{name}-error.log"
+    ).open("a", encoding="utf-8") as error:
         return subprocess.Popen(
             command,
             cwd=ROOT,
             env=env,
             stdin=subprocess.DEVNULL,
-            stdout=out,
-            stderr=err,
+            stdout=output,
+            stderr=error,
             creationflags=FLAGS,
         )
 
 
 def wait_ready(url, predicate, process, name, seconds=150):
     deadline = time.monotonic() + seconds
-    next_notice = 0
+    next_notice = 0.0
     while time.monotonic() < deadline:
         try:
             if predicate(request(url, timeout=2)):
@@ -190,32 +172,32 @@ def wait_ready(url, predicate, process, name, seconds=150):
             say(f"Waiting for {name}...")
             next_notice = time.monotonic() + 15
         time.sleep(1)
-    raise RuntimeError(
-        f"{name} readiness timed out. Read logs/{name}-error.log; use Status.cmd."
-    )
+    raise RuntimeError(f"{name} readiness timed out. Read logs/{name}-error.log")
 
 
 def ensure_service(config, service):
-    running = owned(service)
+    processes = owned(service)
     url = service_url(config, service) + "/health"
-    if running and state().get(service, {}).get("fingerprint") == fingerprint(service):
+    if processes and state().get(service, {}).get("fingerprint") == fingerprint(service):
         try:
             health = request(url)
             owner = port_owner(config["services"][service + "_port"])
-            if owner in [p.pid for p in running] and (
-                health.get("ok") if service == "api" else health.get("status")
-            ):
+            valid = (
+                health.get("service") == "ollama3d-local-api"
+                and health.get("project_root") == str(ROOT)
+                if service == "api"
+                else health.get("status") is True
+            )
+            if owner in [process.pid for process in processes] and valid:
                 say(f"{service} ready: {url[:-7]}")
                 return
         except (httpx.HTTPError, ValueError):
             pass
-    if running:
+    if processes:
         stop_service(service)
     port = config["services"][service + "_port"]
     if port_owner(port):
-        raise RuntimeError(
-            f"Port {port} belongs to another process. Change config.json; that process was left running."
-        )
+        raise RuntimeError(f"Port {port} belongs to another process")
     command = (
         [str(PYTHON), "-m", "uvicorn", "api_service:app", "--workers", "1"]
         if service == "api"
@@ -226,25 +208,23 @@ def ensure_service(config, service):
         service,
         environment(config),
     )
-    predicate = (
-        (
-            lambda h: h.get("service") == "excel-blender-demo-api"
-            and h.get("project_root") == str(ROOT)
+    if service == "api":
+        predicate = lambda value: (
+            value.get("service") == "ollama3d-local-api"
+            and value.get("project_root") == str(ROOT)
         )
-        if service == "api"
-        else (lambda h: h.get("status") is True)
-    )
+    else:
+        predicate = lambda value: value.get("status") is True
     wait_ready(url, predicate, process, service)
     save_state(service)
     say(f"{service} ready: {url[:-7]}")
 
 
 def ollama_executable(config):
-    configured = config["ollama"].get("executable", "")
-    if configured:
-        return str(resolve(config, configured))
-    return shutil.which("ollama") or str(
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Ollama/ollama.exe"
+    configured = config["ollama"]["executable"]
+    return str(resolve(config, configured)) if configured else (
+        shutil.which("ollama")
+        or str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/Ollama/ollama.exe")
     )
 
 
@@ -257,37 +237,106 @@ def ensure_ollama(config, pull=False):
 
         parsed = urlparse(url)
         if port_owner(parsed.port or 80):
-            raise RuntimeError(
-                "Configured Ollama port is occupied by an unresponsive or different service"
-            )
+            raise RuntimeError("Configured Ollama port is occupied by another service")
         executable = ollama_executable(config)
         if not Path(executable).is_file():
-            raise FileNotFoundError("Ollama not installed. Run Install.cmd.")
-        process = launch(
-            [executable, "serve"], "ollama", {**os.environ, "OLLAMA_HOST": url}
-        )
+            raise FileNotFoundError("Ollama not installed. Run Install.cmd")
+        ollama_environment = environment(config)
+        ollama_environment["OLLAMA_HOST"] = url
+        process = launch([executable, "serve"], "ollama", ollama_environment)
         wait_ready(
             url + "/api/tags",
-            lambda h: isinstance(h.get("models"), list),
+            lambda value: isinstance(value.get("models"), list),
             process,
             "ollama",
             45,
         )
         tags = request(url + "/api/tags")
+
     name = config["ollama"]["model"]
-    names = [m["name"] for m in tags.get("models", [])]
+    names = [item["name"] for item in tags.get("models", [])]
+    model_name, _, tag = name.partition(":")
+    tag = tag or "latest"
+    manifests = resolve(config, config["ollama"]["models_directory"]) / "manifests"
+    manifest_exists = any(
+        path.parent.name == model_name for path in manifests.rglob(tag) if path.is_file()
+    )
+    if name not in names and name + ":latest" not in names and pull and manifest_exists:
+        from urllib.parse import urlparse
+
+        owner_pid = port_owner(urlparse(url).port or 80)
+        owner = psutil.Process(owner_pid) if owner_pid and owner_pid > 0 else None
+        if owner is None or owner.name().casefold() != "ollama.exe":
+            raise RuntimeError("The Ollama port is not owned by ollama.exe")
+        say("Restarting Ollama with the configured local model directory...")
+        owner.terminate()
+        owner.wait(timeout=10)
+        process = launch([ollama_executable(config), "serve"], "ollama", environment(config))
+        wait_ready(
+            url + "/api/tags",
+            lambda value: any(
+                item.get("name") in (name, name + ":latest")
+                for item in value.get("models", [])
+            ),
+            process,
+            "ollama",
+            45,
+        )
+        tags = request(url + "/api/tags")
+        names = [item["name"] for item in tags.get("models", [])]
     if name not in names and name + ":latest" not in names:
         if not pull:
-            raise RuntimeError(
-                f"Model {name} is missing. Run Install.cmd to download it."
-            )
-        say(f"Downloading Ollama model {name} (may take several minutes)...")
+            raise RuntimeError(f"Model {name} is missing. Run Install.cmd")
+        say(f"Downloading Ollama model {name}...")
         subprocess.run(
             [ollama_executable(config), "pull", name],
-            env={**os.environ, "OLLAMA_HOST": url},
+            env={**environment(config), "OLLAMA_HOST": url},
             check=True,
         )
     say(f"Ollama ready: {name}")
+
+
+def ensure_integrations(config):
+    from adapters.blender_proof import BlenderProofAdapter
+    from adapters.excel_vba import ExcelVbaAdapter
+
+    excel = ExcelVbaAdapter().status()
+    say(f"Excel VBA ready: {excel['addin_version']} (macro callable)")
+    settings = config["blender_addon"]
+    package = resolve(config, settings["package"])
+    source = ROOT / "blender" / settings["module"]
+    package.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(source.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                archive.write(path, path.relative_to(source.parent).as_posix())
+    report = ROOT / "runtime/install-blender-addon.json"
+    report.parent.mkdir(exist_ok=True)
+    subprocess.run(
+        [
+            str(data_path(config, "blender_exe")),
+            "--background",
+            "--factory-startup",
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(ROOT / "blender/install_proof_addon.py"),
+            "--",
+            str(package),
+            settings["module"],
+            str(report),
+        ],
+        check=True,
+        creationflags=FLAGS,
+        timeout=settings["timeout_seconds"],
+    )
+    probe_directory = ROOT / "runtime/probes"
+    probe_directory.mkdir(parents=True, exist_ok=True)
+    blender = BlenderProofAdapter().status(probe_directory)
+    say(
+        f"Blender add-on ready: {blender['addon_version']} "
+        f"(operator callable: {blender['operator']})"
+    )
 
 
 def sync_webui(config):
@@ -298,10 +347,9 @@ def sync_webui(config):
         timeout=30,
     )["token"]
 
-    def api(path, body=None):
-        return request(base + path, body, token, timeout=60)
+    def api(path, body=None, method=None):
+        return request(base + path, body, token, timeout=60, method=method)
 
-    # Open WebUI persists provider URLs in its database; updating env alone is insufficient.
     api(
         "/ollama/config/update",
         {
@@ -310,75 +358,61 @@ def sync_webui(config):
             "OLLAMA_API_CONFIGS": {},
         },
     )
-    content = (ROOT / "webui_tool.py").read_text(encoding="utf-8-sig")
-    config_literal = repr(str(CONFIG_FILE))
-    content = content.replace("'__PROJECT_CONFIG_FILE__'", config_literal)
-    content = content.replace('"__PROJECT_CONFIG_FILE__"', config_literal)
-    if "__PROJECT_CONFIG_FILE__" in content:
-        raise RuntimeError(
-            "Could not inject the project config path into webui_tool.py"
-        )
-    tool_body = {
-        "id": TOOL_ID,
-        "name": "Excel to Blender",
-        "content": content,
-        "meta": {
-            "description": "Excel export and Blender apply through configured HTTP APIs."
+
+    existing_tools = api("/api/v1/tools/")
+    if any(item["id"] == LEGACY_TOOL_ID for item in existing_tools):
+        api(f"/api/v1/tools/id/{LEGACY_TOOL_ID}/delete", method="DELETE")
+
+    models = api("/api/v1/models/all")
+    items = models if isinstance(models, list) else models.get("items", models.get("data", []))
+    if any(item["id"] == LEGACY_MODEL_ID for item in items):
+        api("/api/v1/models/model/delete", {"id": LEGACY_MODEL_ID})
+
+    server_id = config["mcp"]["server_id"]
+    payload = api("/api/v1/configs/tool_servers")
+    connections = payload.get("TOOL_SERVER_CONNECTIONS", [])
+    if not isinstance(connections, list):
+        raise RuntimeError("Open WebUI returned an invalid MCP server configuration")
+    connection = {
+        "url": service_url(config, "api") + config["mcp"]["path"],
+        "path": config["mcp"]["path"],
+        "type": "mcp",
+        "auth_type": "none",
+        "forward_cookies": False,
+        "headers": {},
+        "key": "",
+        "config": {
+            "enable": True,
+            "function_name_filter_list": "system_status,run_excel_to_blender",
         },
-        "access_grants": [],
+        "info": {
+            "id": server_id,
+            "name": "Ollama3D MCP",
+            "description": "Real Excel VBA and Blender add-on workflow.",
+        },
     }
-    existing = api("/api/v1/tools/")
-    route = (
-        f"/api/v1/tools/id/{TOOL_ID}/update"
-        if any(t["id"] == TOOL_ID for t in existing)
-        else "/api/v1/tools/create"
-    )
-    registered = api(route, tool_body)
-    expected = {
-        "list_demo_files",
-        "run_bom_pipeline",
-        "get_bom_pipeline_job",
-        "list_blender_addons",
-        "run_blender_addon",
-        "get_blender_job",
-        "cancel_blender_job",
-    }
-    if {s["name"] for s in registered.get("specs", [])} != expected:
-        raise RuntimeError("Registered tool schema differs from the expected tools")
+    connections = [
+        item for item in connections if item.get("info", {}).get("id") != server_id
+    ] + [connection]
+    api("/api/v1/configs/tool_servers", {"TOOL_SERVER_CONNECTIONS": connections})
+
     system = (
-        "Execute Excel-to-Blender requests using the supplied tools. First call list_demo_files, using the user input_dir or empty for the configured default. "
-        "Select the exact requested Excel filename. If none was specified and multiple files are present, ask which one. "
-        "For every end-to-end Excel to Blender request, call run_bom_pipeline exactly once with the selected full paths; Python enforces export, apply and verification in order. Preserve the requested directory spelling. Use open_result=true unless the user requests background processing. "
-        "Use get_bom_pipeline_job to inspect a workflow without rerunning it. Never invent paths, ignore errors, or report completion unless status=completed. "
-        "When the user asks for an optional company add-on or Rhino Server, first call list_blender_addons. Choose only an entry whose description matches the request, then call run_blender_addon using its exact id and documented parameters. Never invent operator ids or parameters. "
-        "One-shot Blender operators run through a queue in a long-running Blender Agent. If a tool returns a wait timeout, use get_blender_job with its exact job_id before deciding whether to retry. "
-        "Only call cancel_blender_job when the user explicitly asks to cancel a queued Blender job. "
-        "Include the actual output path. Respond briefly in Vietnamese. "
+        "Bạn điều phối đúng hai MCP tool. Dùng system_status chỉ khi người dùng hỏi trạng thái, "
+        "phiên bản hoặc khả năng sẵn sàng. Dùng run_excel_to_blender chỉ khi người dùng yêu cầu "
+        "chạy xử lý và cung cấp đủ ba đường dẫn tuyệt đối: excel_path (.xlsx), model_path (.blend), "
+        "output_dir. Nếu thiếu đường dẫn, hãy hỏi lại; không tự đoán. Không gọi tool cho câu hỏi "
+        "giải thích. Chỉ báo thành công khi status=completed và luôn nêu output_path. Trả lời ngắn gọn bằng tiếng Việt."
     )
-    local_operations = sorted(
-        name for name, item in config["workflow"].items() if item["provider"] == "local"
-    )
-    http_operations = sorted(
-        name for name, item in config["workflow"].items() if item["provider"] == "http"
-    )
-    system += (
-        "Workflow providers are selected independently. Local operations: "
-        + (", ".join(local_operations) or "none")
-        + ". HTTP operations: "
-        + (", ".join(http_operations) or "none")
-        + ". Follow each provider response and never assume all steps use the same backend. "
-    )
-    profile = config["profile"].strip()
     body = {
         "id": MODEL_ID,
         "base_model_id": config["ollama"]["model"],
-        "name": "Excel → Blender " + profile.title(),
+        "name": "Excel → Blender MCP",
         "meta": {
-            "toolIds": [TOOL_ID],
-            "description": "Local Ollama with configured Excel and Blender APIs.",
+            "toolIds": ["server:mcp:" + server_id],
+            "description": "Qwen with two local MCP tools backed by real VBA and Blender add-on code.",
             "capabilities": {
-                k: False
-                for k in (
+                key: False
+                for key in (
                     "vision",
                     "file_upload",
                     "web_search",
@@ -387,15 +421,6 @@ def sync_webui(config):
                     "builtin_tools",
                 )
             },
-            "suggestion_prompts": (
-                [
-                    {
-                        "content": "Dùng Footwear_BOM.xlsx, xuất VBOM rồi áp vật liệu và màu vào model mặc định. Mở kết quả."
-                    }
-                ]
-                if profile.casefold() == "demo"
-                else []
-            ),
         },
         "params": {
             "function_calling": "native",
@@ -408,20 +433,17 @@ def sync_webui(config):
         "is_active": True,
     }
     models = api("/api/v1/models/all")
-    items = (
-        models
-        if isinstance(models, list)
-        else models.get("items", models.get("data", []))
+    items = models if isinstance(models, list) else models.get("items", models.get("data", []))
+    route = (
+        "/api/v1/models/model/update?id=" + MODEL_ID
+        if any(item["id"] == MODEL_ID for item in items)
+        else "/api/v1/models/create"
     )
-    api(
-        (
-            "/api/v1/models/model/update?id=" + MODEL_ID
-            if any(m["id"] == MODEL_ID for m in items)
-            else "/api/v1/models/create"
-        ),
-        body,
-    )
-    say("Synced Excel, Blender and approved add-on tools in Open WebUI.")
+    api(route, body)
+    specs = api(f"/api/v1/tools/id/server:mcp:{server_id}/specs")["specs"]
+    if [item["name"] for item in specs] != ["system_status", "run_excel_to_blender"]:
+        raise RuntimeError("Open WebUI MCP schema differs from the expected two tools")
+    say("Synced the two-tool MCP model and removed legacy Open WebUI entries.")
 
 
 def check(config):
@@ -431,85 +453,54 @@ def check(config):
         package, required = line.split("==")
         actual = importlib.metadata.version(package)
         if actual != required:
-            raise RuntimeError(
-                f"{package}: expected {required}, found {actual}. Run Install.cmd."
-            )
-    local = {
-        name for name, item in config["workflow"].items() if item["provider"] == "local"
+            raise RuntimeError(f"{package}: expected {required}, found {actual}")
+    required = {
+        "input directory": data_path(config, "inputs"),
+        "default model": data_path(config, "default_model"),
+        "Blender executable": data_path(config, "blender_exe"),
+        "Excel executable": Path(config["excel_vba"]["executable"]),
+        "Excel VBA add-in": resolve(config, config["excel_vba"]["addin_path"]),
+        "Blender add-on source": ROOT / "blender" / config["blender_addon"]["module"] / "__init__.py",
     }
-    required_paths = set()
-    if local.intersection({"files", "export"}):
-        required_paths.add("inputs")
-    if "apply" in local:
-        required_paths.update({"default_model", "blender_exe"})
-    if config["blender_agent"]["enabled"] or any(
-        item.get("enabled", True) for item in config["blender_operators"]
-    ):
-        required_paths.add("blender_exe")
-    for key in sorted(required_paths):
-        if not data_path(config, key).exists():
-            raise FileNotFoundError(
-                f"config.json paths.{key} does not exist: {data_path(config, key)}"
-            )
+    for label, path in required.items():
+        if not path.exists():
+            raise FileNotFoundError(f"{label} does not exist: {path}")
     data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
-    say("Configuration and Python dependencies: OK")
+    say("Configuration, dependencies, and integration files: OK")
 
 
 def status(config):
     healthy = True
-    for name, path in [
-        ("ollama", "/api/tags"),
-        ("api", "/health"),
-        ("webui", "/health"),
-    ]:
+    for name, path in (("ollama", "/api/tags"), ("api", "/health"), ("webui", "/health")):
         url = service_url(config, name)
         try:
             response = request(url + path)
-            valid = (
-                isinstance(response.get("models"), list)
-                if name == "ollama"
-                else (
-                    response.get("service") == "excel-blender-demo-api"
+            if name == "ollama":
+                installed = {item["name"] for item in response.get("models", [])}
+                model = config["ollama"]["model"]
+                if model not in installed and model + ":latest" not in installed:
+                    raise ValueError("configured model is missing")
+            else:
+                valid = (
+                    response.get("service") == "ollama3d-local-api"
                     and response.get("project_root") == str(ROOT)
                     if name == "api"
                     else response.get("status") is True
                 )
-            )
-            if not valid:
-                raise ValueError("unexpected health response")
-            if name != "ollama" and port_owner(
-                config["services"][name + "_port"]
-            ) not in [p.pid for p in owned(name)]:
-                raise ValueError("port is owned by another project")
-            if name == "ollama":
-                model = config["ollama"]["model"]
-                installed = {m["name"] for m in response["models"]}
-                if model not in installed and model + ":latest" not in installed:
-                    raise ValueError("configured model is missing; run Install.cmd")
-            elif state().get(name, {}).get("fingerprint") != fingerprint(name):
-                raise ValueError("configuration/code changed; run Open-WebUI.cmd")
+                if not valid:
+                    raise ValueError("unexpected health response")
+                if port_owner(config["services"][name + "_port"]) not in [
+                    process.pid for process in owned(name)
+                ]:
+                    raise ValueError("port is owned by another project")
+                if state().get(name, {}).get("fingerprint") != fingerprint(name):
+                    raise ValueError("configuration/code changed; run Open-WebUI.cmd")
             say(f"{name}: READY  {url}")
         except (httpx.HTTPError, ValueError) as exc:
             healthy = False
             say(f"{name}: NOT READY  {url} ({exc})")
-    if config["blender_agent"]["enabled"]:
-        from adapters.operators import agent_status
-
-        agent = agent_status()
-        if agent.get("ready"):
-            say(f'blender-agent: READY  pid={agent["pid"]} status={agent["status"]}')
-        else:
-            healthy = False
-            say("blender-agent: NOT READY")
-    providers = ", ".join(
-        f'{name}={item["provider"]}' for name, item in config["workflow"].items()
-    )
-    say(
-        f'Profile: {config["profile"]}; model: {config["ollama"]["model"]}; providers: {providers}'
-    )
-    say(
-        f'Inputs: {data_path(config, "inputs")}\nOutputs: {data_path(config, "outputs")}\nLogs: {ROOT / "logs"}'
-    )
+    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: 2")
+    say(f"Inputs: {data_path(config, 'inputs')}\nOutputs: {data_path(config, 'outputs')}")
     return 0 if healthy else 1
 
 
@@ -517,28 +508,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=[
-            "start",
-            "stop",
-            "status",
-            "check",
-            "install",
-            "sync",
-            "api",
-            "restart-api",
-        ],
+        choices=("start", "stop", "status", "check", "install", "sync", "api", "restart-api"),
     )
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     if args.action == "stop":
-        from adapters.operators import stop_agent
-
-        stopped = stop_agent()
-        if stopped.get("pid"):
-            say(f'Stopped Blender Agent pid={stopped["pid"]}.')
         stop_service("webui")
         stop_service("api")
-        say("Project stopped. Ollama and company service windows remain available.")
+        say("Project stopped. Ollama remains available.")
         return 0
     config = load()
     if args.action == "status":
@@ -554,27 +531,19 @@ def main():
             stop_service("api")
         ensure_service(config, "api")
         return 0
+    if args.action == "install":
+        ensure_integrations(config)
     ensure_ollama(config, pull=args.action == "install")
     ensure_service(config, "api")
-    if config["blender_agent"]["enabled"]:
-        from adapters.operators import ensure_agent
-
-        agent = ensure_agent()
-        say(f'Blender Agent ready: pid={agent["pid"]}')
     ensure_service(config, "webui")
     sync_webui(config)
-    say(
-        "READY: "
-        + service_url(config, "webui")
-        + " - choose Excel -> Blender, then start a new chat."
-    )
+    say(f"READY: {service_url(config, 'webui')} - choose Excel → Blender MCP")
     if not args.no_browser:
         webbrowser.open(service_url(config, "webui"))
     return 0
 
 
 if __name__ == "__main__":
-    # Windows redirected output can default to cp1252; paths may contain Vietnamese.
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
     try:

@@ -1,163 +1,73 @@
-"""Local HTTP API. Run one worker so Blender operations are serialized."""
+"""Local diagnostics and MCP transport for the real proof workflow."""
+
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
-from adapters.common import BLENDER, ROOT, CONFIG, list_files, get_result
-from adapters.excel import export_excel
-from adapters.blender import apply_vbom
-from adapters.operators import (
-    agent_status,
-    cancel_agent_job,
-    ensure_agent,
-    get_agent_job,
-    list_operators,
-    run_operator,
-    stop_agent,
-)
-from workflows.bom_pipeline import get_bom_pipeline_job, run_bom_pipeline
+from pydantic import BaseModel, ConfigDict
+
+from adapters.common import BLENDER, CONFIG, ROOT
+from mcp_server import mcp_http_app
+from workflows.mcp_workflow import run_excel_to_blender, system_status
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async with mcp_http_app.router.lifespan_context(mcp_http_app):
+        yield
+
 
 app = FastAPI(
-    title="Excel and Blender Demo API",
-    version="3.0.0",
-    description="Independent Excel export and Blender apply adapters. Demo plugins, not company plugins.",
+    title="Ollama3D MCP",
+    version="5.0.0",
+    description="Local MCP transport for real Excel VBA and Blender add-on automation.",
+    lifespan=lifespan,
 )
 
 
-class ExportRequest(BaseModel):
+class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     excel_path: str
-    output_dir: str = ""
-
-
-class ApplyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    vbom_path: str
-    model_path: str = ""
-    open_window: bool = True
-
-
-class OperatorRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    operator_id: str
-    parameters: dict[str, object] = Field(default_factory=dict)
-    model_path: str = ""
-    wait_for_completion: bool = True
-
-
-class BomPipelineRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    excel_path: str
-    model_path: str = ""
-    output_dir: str = ""
-    open_result: bool = True
-    force_new: bool = False
+    model_path: str
+    output_dir: str
 
 
 @app.exception_handler(ValueError)
-async def invalid_input(request: Request, exc: ValueError):
+async def invalid_input(_request: Request, exc: ValueError):
     return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
 
 @app.exception_handler(FileNotFoundError)
-async def missing_file(request: Request, exc: FileNotFoundError):
+async def missing_file(_request: Request, exc: FileNotFoundError):
     return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
 
 
 @app.exception_handler(RuntimeError)
-async def execution_error(request: Request, exc: RuntimeError):
+async def execution_error(_request: Request, exc: RuntimeError):
     return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
-
-
-@app.exception_handler(Exception)
-async def unexpected_error(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
 @app.get("/health", tags=["System"])
 def health():
     return {
         "ok": True,
-        "service": "excel-blender-demo-api",
-        "version": "3.0.0",
+        "service": "ollama3d-local-api",
+        "version": "5.0.0",
         "project_root": str(ROOT),
         "profile": CONFIG["profile"],
-        "providers": {
-            name: item["provider"] for name, item in CONFIG["workflow"].items()
-        },
         "blender_available": BLENDER.is_file(),
-        "blender_agent": agent_status(),
     }
 
 
-@app.get("/files", tags=["Files"])
-def files(input_dir: str = ""):
-    return list_files(input_dir)
+@app.get("/proof/status", tags=["Diagnostics"])
+def proof_status():
+    return system_status()
 
 
-@app.post("/workflows/bom", tags=["Workflows"])
-def bom_pipeline(body: BomPipelineRequest):
-    return run_bom_pipeline(
-        body.excel_path,
-        body.model_path,
-        body.output_dir,
-        body.open_result,
-        body.force_new,
-    )
+@app.post("/proof/run", tags=["Diagnostics"])
+def proof_run(body: RunRequest):
+    return run_excel_to_blender(body.excel_path, body.model_path, body.output_dir)
 
 
-@app.get("/workflows/bom/{job_id}", tags=["Workflows"])
-def bom_pipeline_job(job_id: str):
-    return get_bom_pipeline_job(job_id)
-
-
-@app.post("/excel/export-vbom", tags=["Excel"])
-def excel_export(body: ExportRequest):
-    return export_excel(body.excel_path, body.output_dir)
-
-
-@app.post("/blender/apply-vbom", tags=["Blender"])
-def blender_apply(body: ApplyRequest):
-    return apply_vbom(body.vbom_path, body.model_path, body.open_window)
-
-
-@app.get("/blender/operators", tags=["Blender"])
-def blender_operators():
-    return list_operators()
-
-
-@app.post("/blender/operators/run", tags=["Blender"])
-def blender_operator_run(body: OperatorRequest):
-    return run_operator(
-        body.operator_id, body.parameters, body.model_path, body.wait_for_completion
-    )
-
-
-@app.get("/blender/agent", tags=["Blender Agent"])
-def blender_agent_status():
-    return agent_status()
-
-
-@app.post("/blender/agent/start", tags=["Blender Agent"])
-def blender_agent_start():
-    return ensure_agent()
-
-
-@app.post("/blender/agent/stop", tags=["Blender Agent"])
-def blender_agent_stop():
-    return stop_agent()
-
-
-@app.get("/blender/jobs/{job_id}", tags=["Blender Agent"])
-def blender_agent_job(job_id: str):
-    return get_agent_job(job_id)
-
-
-@app.post("/blender/jobs/{job_id}/cancel", tags=["Blender Agent"])
-def blender_agent_job_cancel(job_id: str):
-    return cancel_agent_job(job_id)
-
-
-@app.get("/results/{run_id}", tags=["Results"])
-def results(run_id: str):
-    return get_result(run_id)
+# MCP owns /mcp; REST endpoints above exist only for local diagnostics.
+app.mount("/", mcp_http_app)

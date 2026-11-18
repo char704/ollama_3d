@@ -1,1 +1,1 @@
-"""Replace these adapters with company integrations without changing the HTTP API."""
+"""Timeout-controlled adapters for the real Excel VBA and Blender add-on integrations."""

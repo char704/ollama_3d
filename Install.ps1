@@ -45,26 +45,21 @@ try {
         Install-Package 'Ollama.Ollama'
     }
 
-    $toolLibraryPath = Join-Path $root $config.tool_library.directory
-    $hasBlenderTools = Test-Path -LiteralPath (Join-Path $toolLibraryPath 'blender')
-    $needsBlender = $config.blender_agent.enabled -or $config.workflow.apply.provider -eq 'local' -or $hasBlenderTools
-    if ($needsBlender) {
-        $blenderPath = [Environment]::ExpandEnvironmentVariables($config.paths.blender_exe)
-        if (-not [IO.Path]::IsPathRooted($blenderPath)) { $blenderPath = Join-Path $root $blenderPath }
-        if (-not (Test-Path -LiteralPath $blenderPath -PathType Leaf)) {
-            $candidate = Get-Command blender -ErrorAction SilentlyContinue
-            if ($candidate) { $blenderPath = $candidate.Source } else {
+    $blenderPath = [Environment]::ExpandEnvironmentVariables($config.paths.blender_exe)
+    if (-not [IO.Path]::IsPathRooted($blenderPath)) { $blenderPath = Join-Path $root $blenderPath }
+    if (-not (Test-Path -LiteralPath $blenderPath -PathType Leaf)) {
+        $candidate = Get-Command blender -ErrorAction SilentlyContinue
+        if ($candidate) { $blenderPath = $candidate.Source } else {
+            $candidate = Get-ChildItem -Path "$env:ProgramFiles\Blender Foundation\Blender*\blender.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if (-not $candidate) {
+                Install-Package 'BlenderFoundation.Blender'
                 $candidate = Get-ChildItem -Path "$env:ProgramFiles\Blender Foundation\Blender*\blender.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                if (-not $candidate) {
-                    Install-Package 'BlenderFoundation.Blender'
-                    $candidate = Get-ChildItem -Path "$env:ProgramFiles\Blender Foundation\Blender*\blender.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                }
-                if (-not $candidate) { throw 'Set paths.blender_exe in config.json to the installed blender.exe.' }
-                $blenderPath = $candidate.FullName
             }
-            $config.paths.blender_exe = $blenderPath
-            $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
+            if (-not $candidate) { throw 'Set paths.blender_exe in config.json to the installed blender.exe.' }
+            $blenderPath = $candidate.FullName
         }
+        $config.paths.blender_exe = $blenderPath
+        $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
     }
     $arguments = @((Join-Path $root 'manage.py'), 'install')
     if ($NoBrowser) { $arguments += '--no-browser' }

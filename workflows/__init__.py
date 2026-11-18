@@ -1,1 +1,1 @@
-"""Deterministic workflows exposed to the local orchestrator API."""
+"""Deterministic workflow exposed through the local MCP server."""
