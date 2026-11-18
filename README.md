@@ -1,4 +1,5 @@
 # Ollama3D MCP — Qwen → Excel VBA → Blender add-on
+## Demo: https://www.youtube.com/watch?v=GMYszBR3qgg
 
 Project này cung cấp một MCP server local với đúng hai tool:
 
