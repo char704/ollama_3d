@@ -61,7 +61,7 @@ try {
         $config.paths.blender_exe = $blenderPath
         $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
     }
-    Write-Host 'Blender transport: subprocess (no Blender-side MCP extension required).'
+    Write-Host 'Blender transport: local subprocess and add-on.'
     $arguments = @((Join-Path $root 'manage.py'), 'install')
     if ($NoBrowser) { $arguments += '--no-browser' }
     & $python @arguments

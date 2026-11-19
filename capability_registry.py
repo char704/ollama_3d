@@ -1,4 +1,4 @@
-"""Validated capability registry shared by MCP, Excel, and Blender adapters."""
+"""Validated capability registry shared by the REST agent, Excel, and Blender adapters."""
 
 import json
 import re
@@ -62,7 +62,6 @@ class CapabilityRegistry:
         if not isinstance(items, list) or not items:
             raise ValueError("capabilities.json: capabilities must be a non-empty list")
         self._items = {}
-        public_tools = set()
         for index, item in enumerate(items):
             if not isinstance(item, dict):
                 raise ValueError(f"capabilities.json: capability {index} must be an object")
@@ -79,11 +78,6 @@ class CapabilityRegistry:
             version = item.get("version")
             if version is not None and not _VERSION.fullmatch(version):
                 raise ValueError(f"capabilities.json: {capability_id}.version is invalid")
-            tool = item.get("public_tool")
-            if tool is not None:
-                if not _NAME.fullmatch(tool) or tool in public_tools:
-                    raise ValueError(f"capabilities.json: invalid or duplicate public_tool: {tool!r}")
-                public_tools.add(tool)
             dependencies = item.get("dependencies", [])
             if not isinstance(dependencies, list) or not all(isinstance(value, str) for value in dependencies):
                 raise ValueError(f"capabilities.json: {capability_id}.dependencies must be a string list")
@@ -145,13 +139,6 @@ class CapabilityRegistry:
             self.require(dependency)
         return deepcopy(item)
 
-    def public_tools(self):
-        return [
-            item["public_tool"]
-            for item in self._items.values()
-            if item["enabled"] and item.get("public_tool")
-        ]
-
     def items(self, provider=None, enabled_only=True):
         return [
             deepcopy(item)
@@ -185,7 +172,6 @@ class CapabilityRegistry:
             "path": str(self.path),
             "registered": len(self._items),
             "enabled": len(enabled),
-            "public_tools": self.public_tools(),
         }
 
 
@@ -314,10 +300,6 @@ class ReloadingCapabilityRegistry:
     def require(self, *args, **kwargs):
         self._refresh()
         return self._registry.require(*args, **kwargs)
-
-    def public_tools(self):
-        self._refresh()
-        return self._registry.public_tools()
 
     def items(self, *args, **kwargs):
         self._refresh()

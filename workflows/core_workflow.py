@@ -1,4 +1,4 @@
-"""Proof workflow used by both MCP and the local HTTP diagnostic endpoint."""
+"""Core workflows that call Excel COM/VBA and Blender subprocess adapters directly."""
 
 import datetime
 import hashlib
@@ -34,7 +34,6 @@ def system_status():
         "ok": True,
         "ready": False,
         "service": {
-            "mcp_path": CONFIG["mcp"]["path"],
             "profile": CONFIG["profile"],
             "registry": REGISTRY.summary(),
         },
@@ -62,7 +61,7 @@ def system_status():
         and status["blender"].get("transport_callable")
     )
     status["ok"] = status["ready"]
-    log("mcp_system_status", {"result": status})
+    log("system_status", {"result": status})
     return status
 
 
@@ -152,7 +151,7 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
     finally:
         write_json(state_path, state)
         _workflow_lock.release()
-    log("mcp_run_excel_to_blender", {"arguments": state["input"], "result": state})
+    log("run_excel_to_blender", {"arguments": state["input"], "result": state})
     return state
 
 
@@ -193,7 +192,7 @@ def create_colored_primitive(primitive, color_hex, output_dir, size=2.0, object_
         run_id,
     )
     log(
-        "mcp_create_colored_primitive",
+        "create_colored_primitive",
         {
             "arguments": {
                 "primitive": primitive,

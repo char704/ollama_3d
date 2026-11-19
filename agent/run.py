@@ -1,4 +1,4 @@
-"""Route a user message to deterministic Ollama3D workflows without MCP."""
+"""Route a user message to deterministic Ollama3D workflows."""
 
 import argparse
 import json
@@ -12,7 +12,7 @@ from adapters.common import CONFIG, REGISTRY, ROOT
 from capability_discovery import validate_params
 from project_config import service_url
 from workflows.blender_workflow import run_blender_workflow
-from workflows.mcp_workflow import system_status
+from workflows.core_workflow import system_status
 from workflows.folder_workflow import process_folder
 from workflows.operator_workflow import run_blender_operator
 
@@ -330,6 +330,17 @@ class Agent:
                 result = process_folder(inputs["input_dir"], inputs["output_dir"])
             else:
                 result = run_blender_workflow(candidate_id, inputs)
+        if result.get("status") == "needs_input":
+            return {
+                "ok": False,
+                "status": "needs_input",
+                "intent": intent,
+                "candidate_id": candidate_id,
+                "message": result.get("message", "Cần thêm thông tin đầu vào."),
+                "result": result,
+                "candidates": candidates,
+                "model_calls": calls,
+            }
         completed = result.get("status") == "completed"
         output_path = result.get("output_path")
         message_text = (
@@ -373,7 +384,7 @@ def handle(message):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the local Ollama3D agent without MCP")
+    parser = argparse.ArgumentParser(description="Run the local Ollama3D agent")
     parser.add_argument("message", nargs="+", help="Vietnamese request to route")
     args = parser.parse_args()
     try:

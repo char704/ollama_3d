@@ -1,4 +1,4 @@
-"""Windows lifecycle, integration installation, and Open WebUI MCP registration."""
+"""Windows lifecycle and Open WebUI direct-REST registration."""
 
 import argparse
 import hashlib
@@ -22,9 +22,8 @@ from project_config import CONFIG_FILE, ROOT, data_path, load, resolve, service_
 PYTHON = ROOT / ".venv/Scripts/python.exe"
 STATE = ROOT / "runtime/services.json"
 FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-MODEL_ID = "excel-blender-mcp-proof"
-LEGACY_MODEL_ID = "excel-blender-demo"
-LEGACY_TOOL_ID = "excel_blender_demo"
+MODEL_ID = "ollama3d-direct"
+LOCAL_API_KEY = "ollama3d-local"
 
 
 def say(message):
@@ -102,7 +101,6 @@ def fingerprint(service):
         paths.extend(
             [
                 ROOT / "api_service.py",
-                ROOT / "mcp_server.py",
                 *sorted((ROOT / "adapters").glob("*.py")),
                 *sorted((ROOT / "workflows").glob("*.py")),
                 ROOT / "blender/blender_runner.py",
@@ -130,7 +128,9 @@ def environment(config):
         "OLLAMA_BASE_URLS": service_url(config, "ollama"),
         "WEBUI_AUTH": "False",
         "ENABLE_SIGNUP": "False",
-        "ENABLE_OPENAI_API": "False",
+        "ENABLE_OPENAI_API": "True",
+        "OPENAI_API_BASE_URL": service_url(config, "api") + "/v1",
+        "OPENAI_API_KEY": LOCAL_API_KEY,
         "OFFLINE_MODE": "True",
         "HF_HUB_OFFLINE": "1",
         "ANONYMIZED_TELEMETRY": "False",
@@ -337,7 +337,7 @@ def ensure_integrations(config):
         creationflags=FLAGS,
         timeout=settings["timeout_seconds"],
     )
-    say("Blender subprocess transport ready; no Blender-side MCP extension required.")
+    say("Blender subprocess transport ready.")
     probe_directory = ROOT / "runtime/probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
     blender = BlenderAdapter().status(probe_directory)
@@ -347,23 +347,7 @@ def ensure_integrations(config):
     )
 
 
-def build_system_prompt(registry):
-    introduction = (
-        "Bạn điều phối các MCP tool cục bộ đã được allowlist. Nếu thiếu đường dẫn hoặc tham số "
-        "bắt buộc, hãy hỏi lại; không tự đoán. Không gọi tool cho câu hỏi giải thích. Chỉ báo "
-        "thành công khi status=completed hoặc kết quả tool xác nhận ok, và luôn nêu output_path khi có."
-    )
-    instructions = [
-        item["instructions"]
-        for item in registry.items()
-        if item.get("public_tool") and item.get("instructions")
-    ]
-    return " ".join([introduction, *instructions, "Trả lời ngắn gọn bằng tiếng Việt."])
-
-
 def sync_webui(config):
-    from adapters.common import REGISTRY
-
     base = service_url(config, "webui")
     token = request(
         base + "/api/v1/auths/signin",
@@ -377,98 +361,45 @@ def sync_webui(config):
     api(
         "/ollama/config/update",
         {
-            "ENABLE_OLLAMA_API": True,
+            "ENABLE_OLLAMA_API": False,
             "OLLAMA_BASE_URLS": [service_url(config, "ollama")],
             "OLLAMA_API_CONFIGS": {},
         },
     )
+    api(
+        "/openai/config/update",
+        {
+            "ENABLE_OPENAI_API": True,
+            "OPENAI_API_BASE_URLS": [service_url(config, "api") + "/v1"],
+            "OPENAI_API_KEYS": [LOCAL_API_KEY],
+            "OPENAI_API_CONFIGS": {
+                "0": {
+                    "enable": True,
+                    "connection_type": "local",
+                    "model_ids": [MODEL_ID],
+                }
+            },
+        },
+    )
 
-    existing_tools = api("/api/v1/tools/")
-    if any(item["id"] == LEGACY_TOOL_ID for item in existing_tools):
-        api(f"/api/v1/tools/id/{LEGACY_TOOL_ID}/delete", method="DELETE")
-
-    models = api("/api/v1/models/all")
-    items = models if isinstance(models, list) else models.get("items", models.get("data", []))
-    if any(item["id"] == LEGACY_MODEL_ID for item in items):
-        api("/api/v1/models/model/delete", {"id": LEGACY_MODEL_ID})
-
-    server_id = config["mcp"]["server_id"]
     payload = api("/api/v1/configs/tool_servers")
     connections = payload.get("TOOL_SERVER_CONNECTIONS", [])
     if not isinstance(connections, list):
-        raise RuntimeError("Open WebUI returned an invalid MCP server configuration")
-    connection = {
-        "url": service_url(config, "api") + config["mcp"]["path"],
-        "path": config["mcp"]["path"],
-        "type": "mcp",
-        "auth_type": "none",
-        "forward_cookies": False,
-        "headers": {},
-        "key": "",
-        "config": {
-            "enable": True,
-            "function_name_filter_list": ",".join(REGISTRY.public_tools()),
-        },
-        "info": {
-            "id": server_id,
-            "name": "Ollama3D MCP",
-            "description": "Real Excel VBA and allowlisted Blender add-on workflows.",
-        },
-    }
+        raise RuntimeError("Open WebUI returned an invalid tool server configuration")
     connections = [
-        item for item in connections if item.get("info", {}).get("id") != server_id
-    ] + [connection]
+        item for item in connections if item.get("info", {}).get("id") != "ollama3d"
+    ]
     api("/api/v1/configs/tool_servers", {"TOOL_SERVER_CONNECTIONS": connections})
 
-    system = build_system_prompt(REGISTRY)
-    body = {
-        "id": MODEL_ID,
-        "base_model_id": config["ollama"]["model"],
-        "name": "Ollama3D Excel → Blender",
-        "meta": {
-            "toolIds": ["server:mcp:" + server_id],
-            "description": "Qwen with registry-controlled local tools backed by real VBA and Blender subprocess jobs.",
-            "capabilities": {
-                key: False
-                for key in (
-                    "vision",
-                    "file_upload",
-                    "web_search",
-                    "image_generation",
-                    "code_interpreter",
-                    "builtin_tools",
-                )
-            },
-        },
-        "params": {
-            "function_calling": "native",
-            "temperature": 0,
-            "num_ctx": 8192,
-            "num_predict": 1200,
-            "system": system,
-        },
-        "access_grants": [],
-        "is_active": True,
-    }
-    models = api("/api/v1/models/all")
-    items = models if isinstance(models, list) else models.get("items", models.get("data", []))
-    route = (
-        "/api/v1/models/model/update?id=" + MODEL_ID
-        if any(item["id"] == MODEL_ID for item in items)
-        else "/api/v1/models/create"
-    )
-    api(route, body)
-    specs = api(f"/api/v1/tools/id/server:mcp:{server_id}/specs")["specs"]
-    expected_tools = REGISTRY.public_tools()
-    actual_tools = [item["name"] for item in specs]
-    if len(actual_tools) != len(expected_tools) or set(actual_tools) != set(expected_tools):
-        raise RuntimeError("Open WebUI MCP schema differs from the capability registry")
-    say(f"Synced the {len(expected_tools)}-tool MCP model and removed legacy Open WebUI entries.")
+    discovered = api("/openai/models")
+    model_items = discovered if isinstance(discovered, list) else discovered.get("data", [])
+    if not any(item.get("id") == MODEL_ID for item in model_items):
+        raise RuntimeError("Open WebUI could not discover the direct Ollama3D REST model")
+    say("Synced Open WebUI to the direct Ollama3D REST agent.")
 
 
 def check(config):
     from capability_registry import load_registry
-    from mcp_server import _registered
 
     for line in (ROOT / "requirements.txt").read_text().splitlines():
         if not line or line.startswith("#"):
@@ -492,15 +423,13 @@ def check(config):
         if not path.exists():
             raise FileNotFoundError(f"{label} does not exist: {path}")
     registry = load_registry(resolve(config, config["capability_registry"]))
-    original_tools = {
-        "system_status",
-        "run_excel_to_blender",
-        "create_colored_primitive",
-    }
-    if not original_tools.issubset(_registered):
-        raise RuntimeError("One or more original MCP tools are missing")
-    if set(registry.public_tools()) != _registered:
-        raise RuntimeError("Capability registry public tools do not match MCP implementations")
+    for capability_id in (
+        "system.status",
+        "workflow.excel_to_blender",
+        "workflow.process_folder",
+        "blender.create_colored_primitive",
+    ):
+        registry.require(capability_id)
     data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
     say("Configuration, dependencies, and integration files: OK")
 
@@ -661,8 +590,11 @@ def status(config):
         except (httpx.HTTPError, ValueError) as exc:
             healthy = False
             say(f"{name}: NOT READY  {url} ({exc})")
-    tool_count = len(load_registry(resolve(config, config["capability_registry"])).public_tools())
-    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: {tool_count}")
+    registry = load_registry(resolve(config, config["capability_registry"]))
+    say(
+        f"Profile: {config['profile']}; model: {config['ollama']['model']}; "
+        f"capabilities: {registry.summary()['enabled']}"
+    )
     say(f"Inputs: {data_path(config, 'inputs')}\nOutputs: {data_path(config, 'outputs')}")
     return 0 if healthy else 1
 
@@ -727,7 +659,7 @@ def main():
     ensure_service(config, "api")
     ensure_service(config, "webui")
     sync_webui(config)
-    say(f"READY: {service_url(config, 'webui')} - choose Ollama3D Excel → Blender")
+    say(f"READY: {service_url(config, 'webui')} - choose {MODEL_ID}")
     if not args.no_browser:
         webbrowser.open(service_url(config, "webui"))
     return 0

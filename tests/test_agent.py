@@ -78,13 +78,13 @@ class AgentTests(unittest.TestCase):
         )
 
     def test_chat_uses_router_and_utility_model_without_tools(self):
-        client = FakeClient({"intent": "chat"}, {"answer": "MCP là một giao thức."})
+        client = FakeClient({"intent": "chat"}, {"answer": "VBOM mô tả vật liệu."})
         with patch.object(agent_run, "run_blender_operator") as operator, patch.object(
             agent_run, "run_blender_workflow"
         ) as workflow:
-            result = agent_run.Agent(client).handle("MCP là gì?")
+            result = agent_run.Agent(client).handle("VBOM là gì?")
         self.assertEqual(result["status"], "chat")
-        self.assertEqual(result["message"], "MCP là một giao thức.")
+        self.assertEqual(result["message"], "VBOM mô tả vật liệu.")
         self.assertEqual(
             [call["model"] for call in client.calls],
             [
@@ -159,10 +159,9 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(body["stream"])
         self.assertFalse(metadata["think"])
 
-    def test_agent_source_does_not_import_mcp_runtime(self):
+    def test_agent_source_uses_direct_workflows(self):
         source = Path(agent_run.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("import mcp_server", source)
-        self.assertNotIn("from mcp", source)
+        self.assertIn("from workflows.core_workflow import", source)
 
 
 if __name__ == "__main__":

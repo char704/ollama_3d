@@ -1,4 +1,4 @@
-"""Validated configuration shared by the MCP server and local launcher."""
+"""Validated configuration shared by the REST agent and local launcher."""
 
 import json
 import os
@@ -53,12 +53,6 @@ def load(path=None):
     ):
         if not isinstance(ollama.get(key), str) or not ollama[key].strip():
             raise ValueError(f"config.json: ollama.{key} is required")
-
-    mcp = config.get("mcp", {})
-    if mcp.get("path") != "/mcp" or not re.fullmatch(
-        r"[a-z][a-z0-9_-]{1,63}", mcp.get("server_id", "")
-    ):
-        raise ValueError("config.json: invalid MCP configuration")
 
     excel = config.get("excel_vba", {})
     for key in ("executable", "addin_path"):

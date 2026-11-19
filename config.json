@@ -1,5 +1,5 @@
 {
-  "profile": "mcp-proof",
+  "profile": "rest-direct",
   "capability_registry": "capabilities.json",
   "paths": {
     "inputs": "inputs",
@@ -19,10 +19,6 @@
     "utility_model": "qwen3.5:0.8b",
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
-  },
-  "mcp": {
-    "path": "/mcp",
-    "server_id": "ollama3d"
   },
   "excel_vba": {
     "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from adapters.common import CONFIG, ROOT, log
 from project_config import scoped_path
-from workflows.mcp_workflow import run_excel_to_blender
+from workflows.core_workflow import run_excel_to_blender
 from workflows.operator_workflow import run_blender_operator
 
 
