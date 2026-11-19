@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 from copy import deepcopy
 from pathlib import Path
 
@@ -27,15 +28,23 @@ def _validate_optional_fields(capability_id, item):
     if risk is not None and risk not in _RISKS:
         raise ValueError(f"capabilities.json: {capability_id}.risk is invalid")
     params = item.get("params")
-    if params is not None and not isinstance(params, dict):
+    if "params" in item and not isinstance(params, dict):
         raise ValueError(f"capabilities.json: {capability_id}.params must be an object")
     docs = item.get("docs")
     if docs is not None:
         if not isinstance(docs, str) or not docs.strip():
             raise ValueError(f"capabilities.json: {capability_id}.docs must be a non-empty string")
         path = Path(docs)
-        if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "knowledge":
-            raise ValueError(f"capabilities.json: {capability_id}.docs must be inside knowledge/")
+        valid_knowledge = path.parts and path.parts[0] == "knowledge"
+        valid_addon = (
+            len(path.parts) >= 3
+            and path.parts[0] == "addons"
+            and path.parts[1] == item.get("addon_module")
+        )
+        if path.is_absolute() or ".." in path.parts or not (valid_knowledge or valid_addon):
+            raise ValueError(
+                f"capabilities.json: {capability_id}.docs must be inside knowledge/ or its add-on folder"
+            )
     expose = item.get("expose")
     if expose is not None and expose != "generic":
         raise ValueError(f"capabilities.json: {capability_id}.expose must be 'generic'")
@@ -87,6 +96,12 @@ class CapabilityRegistry:
                         raise ValueError(
                             f"capabilities.json: {capability_id}.{field} is required for blender_operator"
                         )
+                if not _ADDON_MODULE.fullmatch(item["addon_module"]):
+                    raise ValueError(f"capabilities.json: {capability_id}.addon_module is invalid")
+                if not isinstance(item["params"], dict):
+                    raise ValueError(f"capabilities.json: {capability_id}.params must be an object")
+                if item["risk"] not in _RISKS:
+                    raise ValueError(f"capabilities.json: {capability_id}.risk is invalid")
                 if not _OPERATOR.fullmatch(item["target"]):
                     raise ValueError(
                         f"capabilities.json: {capability_id}.target must be category.name"
@@ -174,7 +189,162 @@ class CapabilityRegistry:
         }
 
 
-def load_registry(path):
+def load_registry(path, addon_root=None, workflow_root=None):
     path = Path(path).resolve()
-    document = json.loads(path.read_text(encoding="utf-8-sig"))
-    return CapabilityRegistry(path, document)
+    return ReloadingCapabilityRegistry(path, addon_root, workflow_root)
+
+
+def _safe_name(value):
+    value = re.sub(r"[^a-z0-9_]+", "_", value.casefold()).strip("_")
+    return value if value and value[0].isalpha() else "operator_" + value
+
+
+class ReloadingCapabilityRegistry:
+    """Merge the base registry with add-on packs and reload when files change."""
+
+    def __init__(self, path, addon_root=None, workflow_root=None):
+        self.path = Path(path).resolve()
+        self.addon_root = Path(addon_root or self.path.parent / "addons").resolve()
+        self.workflow_root = Path(
+            workflow_root or self.path.parent / "workflows" / "definitions"
+        ).resolve()
+        self._lock = threading.RLock()
+        self._snapshot = None
+        self._registry = None
+        self._workflows = {}
+        self._refresh()
+
+    def _files(self):
+        files = [self.path]
+        if self.addon_root.is_dir():
+            files.extend(sorted(self.addon_root.glob("*/addon.json")))
+            files.extend(sorted(self.addon_root.glob("*/docs.md")))
+            files.extend(sorted(self.addon_root.glob("*/workflows/*.json")))
+        if self.workflow_root.is_dir():
+            files.extend(sorted(self.workflow_root.glob("*.json")))
+        return files
+
+    def _state(self):
+        return tuple(
+            (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+            for path in self._files()
+        )
+
+    def _pack_entries(self, path):
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+        module = document.get("module", "")
+        if not _ADDON_MODULE.fullmatch(module) or path.parent.name != module:
+            raise ValueError(f"{path}: module must match its add-on folder name")
+        description = document.get("description", "")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(f"{path}: description must be a non-empty string")
+        operators = document.get("operators")
+        if not isinstance(operators, dict) or not operators:
+            raise ValueError(f"{path}: operators must be a non-empty object")
+        default_docs = path.parent / "docs.md"
+        entries = []
+        for target, settings in operators.items():
+            if not _OPERATOR.fullmatch(target) or not isinstance(settings, dict):
+                raise ValueError(f"{path}: invalid operator entry: {target}")
+            action = target.split(".", 1)[1]
+            module_id = ".".join(_safe_name(part) for part in module.split("."))
+            docs = settings.get("docs")
+            if docs is None and default_docs.is_file():
+                docs_path = default_docs
+            elif docs is not None:
+                docs_path = (path.parent / docs).resolve()
+                if not docs_path.is_relative_to(path.parent.resolve()):
+                    raise ValueError(f"{path}: operator docs must stay inside the add-on folder")
+                if not docs_path.is_file():
+                    raise ValueError(f"{path}: operator docs do not exist: {docs}")
+            else:
+                docs_path = None
+            entry = {
+                "id": settings.get("id", f"blender.{module_id}.{_safe_name(action)}"),
+                "provider": "blender_operator",
+                "handler": "generic_operator",
+                "target": target,
+                "addon_module": module,
+                "description": settings.get("description") or description,
+                "risk": settings.get("risk", "mutating"),
+                "params": settings.get("params"),
+                "expose": "generic",
+                "background_safe": settings.get("background_safe", False),
+                "enabled": settings.get("enabled", False),
+            }
+            if docs_path is not None:
+                entry["docs"] = (
+                    Path("addons") / module / docs_path.relative_to(path.parent.resolve())
+                ).as_posix()
+            entries.append(entry)
+        return entries
+
+    def _refresh(self):
+        with self._lock:
+            state = self._state()
+            if state == self._snapshot:
+                return
+            base = json.loads(self.path.read_text(encoding="utf-8-sig"))
+            capabilities = list(base.get("capabilities", []))
+            for pack in sorted(self.addon_root.glob("*/addon.json")) if self.addon_root.is_dir() else []:
+                capabilities.extend(self._pack_entries(pack))
+            merged = {"schema_version": base.get("schema_version"), "capabilities": capabilities}
+            registry = CapabilityRegistry(self.path, merged)
+
+            from workflow_definitions import validate_definition
+
+            workflows = {}
+            workflow_files = []
+            if self.workflow_root.is_dir():
+                workflow_files.extend(sorted(self.workflow_root.glob("*.json")))
+            if self.addon_root.is_dir():
+                workflow_files.extend(sorted(self.addon_root.glob("*/workflows/*.json")))
+            for workflow_path in workflow_files:
+                definition = validate_definition(
+                    json.loads(workflow_path.read_text(encoding="utf-8-sig"))
+                )
+                workflow_id = definition["id"]
+                if workflow_id in workflows:
+                    raise ValueError(f"Duplicate workflow id: {workflow_id}")
+                workflows[workflow_id] = definition
+            self._registry = registry
+            self._workflows = workflows
+            self._snapshot = state
+
+    def require(self, *args, **kwargs):
+        self._refresh()
+        return self._registry.require(*args, **kwargs)
+
+    def public_tools(self):
+        self._refresh()
+        return self._registry.public_tools()
+
+    def items(self, *args, **kwargs):
+        self._refresh()
+        return self._registry.items(*args, **kwargs)
+
+    def generic_capabilities(self):
+        self._refresh()
+        return self._registry.generic_capabilities()
+
+    def addon_modules(self, *args, **kwargs):
+        self._refresh()
+        return self._registry.addon_modules(*args, **kwargs)
+
+    def summary(self):
+        self._refresh()
+        result = self._registry.summary()
+        result["addon_root"] = str(self.addon_root)
+        result["workflows"] = len(self._workflows)
+        return result
+
+    def workflows(self):
+        self._refresh()
+        return [deepcopy(value) for value in self._workflows.values()]
+
+    def require_workflow(self, workflow_id):
+        self._refresh()
+        try:
+            return deepcopy(self._workflows[workflow_id])
+        except KeyError as exc:
+            raise ValueError(f"Workflow definition is not registered: {workflow_id}") from exc

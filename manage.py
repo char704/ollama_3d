@@ -590,6 +590,88 @@ def discover_addons(config, requested_modules, write_proposals=False):
     return 0
 
 
+def _write_addon_json(path, document):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def addon_add(config, module, root=ROOT):
+    from adapters.blender_mcp import BlenderMcpAdapter
+    from capability_discovery import propose_entries
+    from capability_registry import load_registry
+
+    if not re.fullmatch(r"[a-z][a-z0-9_.]*", module):
+        raise ValueError("Add-on module name is invalid")
+    pack_directory = Path(root) / "addons" / module
+    if pack_directory.exists():
+        raise FileExistsError(f"Add-on pack already exists: {pack_directory}")
+    discovery_directory = Path(root) / "runtime" / "discovered" / module
+    report = BlenderMcpAdapter().discover([module], discovery_directory)
+    registry = load_registry(
+        resolve(config, config["capability_registry"]),
+        addon_root=Path(root) / "addons",
+        workflow_root=Path(root) / "workflows" / "definitions",
+    )
+    proposals = propose_entries(report, registry)
+    if not proposals:
+        raise RuntimeError("Discovery found no new operators for this add-on")
+    operators = {}
+    for proposal in proposals:
+        operators[proposal["target"]] = {
+            "id": proposal["id"],
+            "enabled": False,
+            "risk": proposal["risk"],
+            "description": proposal["description"],
+            "background_safe": proposal["background_safe"],
+            "params": proposal["params"],
+        }
+    document = {
+        "module": module,
+        "description": f"Discovered Blender add-on: {module}",
+        "operators": operators,
+    }
+    _write_addon_json(pack_directory / "addon.json", document)
+    say(f"Created disabled add-on pack: {pack_directory / 'addon.json'}")
+    for operator in operators:
+        say(f"  disabled  {operator}")
+    return 0
+
+
+def addon_set_enabled(module, operators, enabled, root=ROOT):
+    if not operators:
+        raise ValueError("At least one operator idname is required")
+    path = Path(root) / "addons" / module / "addon.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Add-on pack does not exist: {path}")
+    document = json.loads(path.read_text(encoding="utf-8-sig"))
+    available = document.get("operators", {})
+    unknown = [operator for operator in operators if operator not in available]
+    if unknown:
+        raise ValueError("Unknown add-on operator(s): " + ", ".join(unknown))
+    for operator in operators:
+        available[operator]["enabled"] = enabled
+    _write_addon_json(path, document)
+    action = "Enabled" if enabled else "Disabled"
+    say(f"{action} {len(operators)} operator(s) in {module}.")
+    return 0
+
+
+def addon_command(config, action, module, operators, root=ROOT):
+    if action == "add":
+        if operators:
+            raise ValueError("addon add does not accept operator arguments")
+        return addon_add(config, module, root)
+    if action == "enable":
+        return addon_set_enabled(module, operators, True, root)
+    if action == "disable":
+        return addon_set_enabled(module, operators, False, root)
+    raise ValueError("addon action must be add, enable, or disable")
+
+
 def status(config):
     from capability_registry import load_registry
 
@@ -642,8 +724,12 @@ def main():
             "api",
             "restart-api",
             "discover",
+            "addon",
         ),
     )
+    parser.add_argument("addon_action", nargs="?")
+    parser.add_argument("addon_module", nargs="?")
+    parser.add_argument("addon_operators", nargs="*")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--module", action="append", default=[])
     parser.add_argument("--write-proposals", action="store_true")
@@ -661,6 +747,15 @@ def main():
         return 0
     if args.action == "discover":
         return discover_addons(config, args.module, args.write_proposals)
+    if args.action == "addon":
+        if not args.addon_action or not args.addon_module:
+            raise ValueError("Usage: manage.py addon <add|enable|disable> <module> [operator ...]")
+        return addon_command(
+            config,
+            args.addon_action,
+            args.addon_module,
+            args.addon_operators,
+        )
     if args.action == "sync":
         sync_webui(config)
         return 0

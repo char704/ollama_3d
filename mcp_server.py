@@ -117,7 +117,8 @@ def _docs(capability: dict[str, Any]) -> tuple[str, str]:
         return "", ""
     path = (ROOT / relative).resolve()
     knowledge = (ROOT / "knowledge").resolve()
-    if not path.is_relative_to(knowledge) or not path.is_file():
+    addons = (ROOT / "addons").resolve()
+    if not (path.is_relative_to(knowledge) or path.is_relative_to(addons)) or not path.is_file():
         return "", ""
     content = path.read_text(encoding="utf-8-sig")
     title = next(

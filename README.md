@@ -113,7 +113,25 @@ Mỗi tác vụ mở một Blender background process, đọc `job.json` qua ent
 
 ## Capability registry
 
-[`capabilities.json`](capabilities.json) là nguồn cấu hình chung cho Excel và Blender. Mỗi capability có ID duy nhất, provider, handler, target, phiên bản, trạng thái bật/tắt và dependency. Tên macro VBA và Blender operator được đọc từ registry thay vì cho Qwen truyền vào hoặc khai báo lặp lại trong `config.json`.
+[`capabilities.json`](capabilities.json) giữ các tool lõi và entry cũ. Blender add-on mới dùng pack trong `addons/<module>/`; registry tự merge và tự nạp lại khi `addon.json`, `docs.md` hoặc workflow thay đổi, không cần restart.
+
+Quy trình thêm add-on đã cài trong Blender:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py addon add my_addon
+.\.venv\Scripts\python.exe manage.py addon enable my_addon category.operator_name
+```
+
+Lệnh `addon add` discovery toàn bộ operator và tạo `addons/my_addon/addon.json` với mọi operator tắt mặc định. `addon enable` hoặc `addon disable` chỉ sửa metadata pack. Gỡ pack bằng cách xóa thư mục `addons/my_addon`.
+
+Mỗi pack có dạng:
+
+```text
+addons/<module>/
+  addon.json
+  docs.md
+  workflows/*.json
+```
 
 Ví dụ thêm một macro hoặc operator mới:
 
@@ -130,13 +148,7 @@ Ví dụ thêm một macro hoặc operator mới:
 
 Capability chỉ được chạy khi đang bật và toàn bộ dependency cũng đang bật. `manage.py check` xác minh registry, còn Open WebUI lấy allowlist public tool trực tiếp từ registry.
 
-Để thêm integration mới:
-
-1. thêm capability với ID không trùng vào `capabilities.json`;
-2. viết trusted handler trong adapter/runner tương ứng và kiểm tra toàn bộ đầu vào;
-3. thêm dependency vào workflow sử dụng capability đó;
-4. chỉ khai báo `public_tool` khi đã có MCP implementation tương ứng;
-5. chạy unit test, `tests/smoke_mcp.py` và `tests/smoke_webui_mcp.py`.
+Để thêm operator add-on mới không cần sửa file Python hoặc `capabilities.json`: cài add-on, chạy `addon add`, xem schema được discovery, rồi bật đúng operator cần dùng.
 
 Registry không tự động cho phép mọi macro hoặc `bpy.ops`. Thiết kế này cố ý yêu cầu handler rõ ràng để giữ ổn định, tránh xung đột tên và không đưa khả năng chạy VBA/Python tùy ý cho Qwen.
 

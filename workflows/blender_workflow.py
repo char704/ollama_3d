@@ -10,10 +10,9 @@ from adapters.blender_mcp import BlenderMcpAdapter
 from adapters.common import CONFIG, REGISTRY, ROOT, log, write_json
 from capability_discovery import validate_params
 from project_config import data_path, scoped_path
-from workflow_definitions import interpolate_definition, load_definition
+from workflow_definitions import interpolate_definition
 
 _workflow_lock = threading.Lock()
-DEFINITIONS = ROOT / "workflows" / "definitions"
 
 
 def _now():
@@ -21,7 +20,7 @@ def _now():
 
 
 def run_blender_workflow(workflow_id, inputs):
-    definition = load_definition(DEFINITIONS, workflow_id)
+    definition = REGISTRY.require_workflow(workflow_id)
     normalized_inputs = dict(inputs)
     for name, kind in definition["inputs"].items():
         if kind == "path" and name in normalized_inputs:

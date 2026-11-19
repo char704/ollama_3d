@@ -35,35 +35,6 @@
       "enabled": true
     },
     {
-      "id": "blender.ollama3d_proof.apply_vbom",
-      "provider": "blender_operator",
-      "handler": "generic_operator",
-      "target": "ollama3d_proof.apply_vbom",
-      "addon_module": "ollama3d_proof_addon",
-      "description": "Apply a validated proof-v1 VBOM file to the three footwear meshes.",
-      "risk": "filesystem",
-      "params": {
-        "type": "object",
-        "properties": {
-          "filepath": {
-            "type": "string",
-            "x-path": true
-          },
-          "run_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "filepath",
-          "run_id"
-        ],
-        "additionalProperties": false
-      },
-      "expose": "generic",
-      "background_safe": true,
-      "enabled": true
-    },
-    {
       "id": "workflow.excel_to_blender",
       "provider": "workflow",
       "handler": "run_excel_to_blender",

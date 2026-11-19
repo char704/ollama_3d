@@ -13,7 +13,7 @@ from workflows import blender_workflow
 
 
 def fixture_registry():
-    return CapabilityRegistry(
+    capabilities = CapabilityRegistry(
         ROOT / "tests" / "fixture-capabilities.json",
         {
             "schema_version": 1,
@@ -40,6 +40,20 @@ def fixture_registry():
             ],
         },
     )
+    definition = load_definition(
+        ROOT / "workflows" / "definitions", "workflow.fixture_generic"
+    )
+
+    class FixtureRegistry:
+        def require(self, *args, **kwargs):
+            return capabilities.require(*args, **kwargs)
+
+        def require_workflow(self, workflow_id):
+            if workflow_id != definition["id"]:
+                raise ValueError("Workflow definition is not registered")
+            return definition
+
+    return FixtureRegistry()
 
 
 class WorkflowDefinitionTests(unittest.TestCase):

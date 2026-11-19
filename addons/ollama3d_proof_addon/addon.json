@@ -1,0 +1,30 @@
+{
+  "module": "ollama3d_proof_addon",
+  "description": "Validated proof add-on for applying VBOM materials to footwear meshes.",
+  "operators": {
+    "ollama3d_proof.apply_vbom": {
+      "id": "blender.ollama3d_proof.apply_vbom",
+      "enabled": true,
+      "risk": "filesystem",
+      "description": "Apply a validated proof-v1 VBOM file to the three footwear meshes.",
+      "background_safe": true,
+      "params": {
+        "type": "object",
+        "properties": {
+          "filepath": {
+            "type": "string",
+            "x-path": true
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "filepath",
+          "run_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
