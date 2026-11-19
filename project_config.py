@@ -44,7 +44,7 @@ def load(path=None):
         raise ValueError("Ollama, API and WebUI must use different ports")
 
     ollama = config.get("ollama", {})
-    for key in ("model", "executable", "models_directory"):
+    for key in ("model", "router_model", "executable", "models_directory"):
         if not isinstance(ollama.get(key), str) or not ollama[key].strip():
             raise ValueError(f"config.json: ollama.{key} is required")
 

@@ -4,6 +4,19 @@ Demo: [YouTube](https://www.youtube.com/watch?v=GMYszBR3qgg)
 
 Project chạy local trên Windows, cho phép Qwen điều phối Excel VBA và Blender qua allowlist. MCP phía Qwen vẫn được hỗ trợ nhưng Blender mặc định chạy bằng tiến trình con ngắn hạn.
 
+Đường điều phối mặc định là agent CLI nhỏ, không phụ thuộc MCP:
+
+```powershell
+.\.venv\Scripts\python.exe -m agent.run "Áp VBOM vào mẫu giày ..."
+```
+
+Trước khi dùng, cài hai model được cấu hình (installer không tự tải ngầm):
+
+```powershell
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:0.8b
+```
+
 - `system_status()` kiểm tra Qwen, macro VBA thật và Blender operator thật.
 - `run_excel_to_blender(excel_path, model_path, output_dir)` chạy trọn workflow và kiểm chứng file `.blend` sau khi mở lại.
 - `create_colored_primitive(primitive, color_hex, output_dir, size, object_name)` tạo cube, UV sphere hoặc cylinder có màu qua Blender subprocess.
@@ -61,7 +74,8 @@ Các đường dẫn cần đúng trong `config.json`:
     "blender_exe": "E:/Blender/blender.exe"
   },
   "ollama": {
-    "model": "qwen3:8b",
+    "model": "qwen3.5:4b",
+    "router_model": "qwen3.5:0.8b",
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
   },

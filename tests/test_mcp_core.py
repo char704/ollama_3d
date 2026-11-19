@@ -258,7 +258,7 @@ class WorkflowTests(unittest.TestCase):
     ):
         response = Mock()
         response.raise_for_status.return_value = None
-        response.json.return_value = {"models": [{"name": "qwen3:8b"}]}
+        response.json.return_value = {"models": [{"name": mcp_workflow.CONFIG["ollama"]["model"]}]}
         get.return_value = response
         excel_status.return_value = {"macro_callable": True}
         blender_status.return_value = {
