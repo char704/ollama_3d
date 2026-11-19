@@ -92,6 +92,10 @@ addons/<module>/
   workflows/*.json
 ```
 
+Hướng dẫn đầy đủ cho các trường hợp thêm add-on, cập nhật/đổi add-on và thay Excel
+add-in nằm tại [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md). Tài liệu cũng mô tả
+contract bắt buộc, cách viết metadata để Qwen chọn đúng, kiểm thử và rollback.
+
 ## Lệnh quản trị
 
 ```powershell
