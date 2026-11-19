@@ -17,6 +17,10 @@ ollama pull qwen3.5:4b
 ollama pull qwen3.5:0.8b
 ```
 
+`qwen3.5:4b` phân loại intent, chọn capability và trích tham số. Model
+`qwen3.5:0.8b` chỉ trả lời hội thoại ngắn sau khi 4B đã xác nhận intent là
+`chat`; nó không được định tuyến hoặc kích hoạt Blender.
+
 - `system_status()` kiểm tra Qwen, macro VBA thật và Blender operator thật.
 - `run_excel_to_blender(excel_path, model_path, output_dir)` chạy trọn workflow và kiểm chứng file `.blend` sau khi mở lại.
 - `create_colored_primitive(primitive, color_hex, output_dir, size, object_name)` tạo cube, UV sphere hoặc cylinder có màu qua Blender subprocess.
@@ -75,7 +79,8 @@ Các đường dẫn cần đúng trong `config.json`:
   },
   "ollama": {
     "model": "qwen3.5:4b",
-    "router_model": "qwen3.5:0.8b",
+    "router_model": "qwen3.5:4b",
+    "utility_model": "qwen3.5:0.8b",
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
   },

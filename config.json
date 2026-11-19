@@ -15,7 +15,8 @@
   },
   "ollama": {
     "model": "qwen3.5:4b",
-    "router_model": "qwen3.5:0.8b",
+    "router_model": "qwen3.5:4b",
+    "utility_model": "qwen3.5:0.8b",
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
   },

@@ -69,8 +69,15 @@ class AgentTests(unittest.TestCase):
         self.assertIn(execution["output_path"], result["message"])
         execute.assert_called_once()
         self.assertEqual([call["role"] for call in client.calls], ["router", "selector"])
+        self.assertEqual(
+            [call["model"] for call in client.calls],
+            [
+                agent_run.CONFIG["ollama"]["router_model"],
+                agent_run.CONFIG["ollama"]["model"],
+            ],
+        )
 
-    def test_chat_uses_router_and_main_model_without_tools(self):
+    def test_chat_uses_router_and_utility_model_without_tools(self):
         client = FakeClient({"intent": "chat"}, {"answer": "MCP là một giao thức."})
         with patch.object(agent_run, "run_blender_operator") as operator, patch.object(
             agent_run, "run_blender_workflow"
@@ -78,8 +85,25 @@ class AgentTests(unittest.TestCase):
             result = agent_run.Agent(client).handle("MCP là gì?")
         self.assertEqual(result["status"], "chat")
         self.assertEqual(result["message"], "MCP là một giao thức.")
+        self.assertEqual(
+            [call["model"] for call in client.calls],
+            [
+                agent_run.CONFIG["ollama"]["router_model"],
+                agent_run.CONFIG["ollama"]["utility_model"],
+            ],
+        )
         operator.assert_not_called()
         workflow.assert_not_called()
+
+    def test_small_model_cannot_route_or_select_blender_work(self):
+        self.assertEqual(
+            agent_run.CONFIG["ollama"]["router_model"],
+            agent_run.CONFIG["ollama"]["model"],
+        )
+        self.assertNotEqual(
+            agent_run.CONFIG["ollama"]["utility_model"],
+            agent_run.CONFIG["ollama"]["router_model"],
+        )
 
     def test_retrieval_is_limited_to_five_candidates(self):
         capabilities = [

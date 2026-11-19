@@ -3,6 +3,7 @@
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import httpx
@@ -235,7 +236,7 @@ class Agent:
             }
             chat = self._call(
                 calls,
-                CONFIG["ollama"]["model"],
+                CONFIG["ollama"]["utility_model"],
                 "Answer briefly in Vietnamese. Do not claim that files or tools were used.",
                 message,
                 schema,
@@ -353,6 +354,8 @@ def main():
     except Exception as exc:
         result = {"ok": False, "status": "error", "message": str(exc)}
         exit_code = 1
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(exit_code)
 
