@@ -8,6 +8,40 @@ from pathlib import Path
 _ID = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+")
 _NAME = re.compile(r"[a-z][a-z0-9_]*")
 _VERSION = re.compile(r"\d+\.\d+\.\d+")
+_ADDON_MODULE = re.compile(r"[a-z][a-z0-9_.]*")
+_OPERATOR = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
+_RISKS = {"read", "mutating", "filesystem"}
+
+
+def _validate_optional_fields(capability_id, item):
+    for field in ("description", "instructions"):
+        value = item.get(field)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"capabilities.json: {capability_id}.{field} must be a non-empty string")
+    addon_module = item.get("addon_module")
+    if addon_module is not None and (
+        not isinstance(addon_module, str) or not _ADDON_MODULE.fullmatch(addon_module)
+    ):
+        raise ValueError(f"capabilities.json: {capability_id}.addon_module is invalid")
+    risk = item.get("risk")
+    if risk is not None and risk not in _RISKS:
+        raise ValueError(f"capabilities.json: {capability_id}.risk is invalid")
+    params = item.get("params")
+    if params is not None and not isinstance(params, dict):
+        raise ValueError(f"capabilities.json: {capability_id}.params must be an object")
+    docs = item.get("docs")
+    if docs is not None:
+        if not isinstance(docs, str) or not docs.strip():
+            raise ValueError(f"capabilities.json: {capability_id}.docs must be a non-empty string")
+        path = Path(docs)
+        if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "knowledge":
+            raise ValueError(f"capabilities.json: {capability_id}.docs must be inside knowledge/")
+    expose = item.get("expose")
+    if expose is not None and expose != "generic":
+        raise ValueError(f"capabilities.json: {capability_id}.expose must be 'generic'")
+    background_safe = item.get("background_safe")
+    if background_safe is not None and type(background_safe) is not bool:
+        raise ValueError(f"capabilities.json: {capability_id}.background_safe must be boolean")
 
 
 class CapabilityRegistry:
@@ -46,6 +80,17 @@ class CapabilityRegistry:
                 raise ValueError(f"capabilities.json: {capability_id}.dependencies must be a string list")
             if not isinstance(item.get("settings", {}), dict):
                 raise ValueError(f"capabilities.json: {capability_id}.settings must be an object")
+            _validate_optional_fields(capability_id, item)
+            if item["provider"] == "blender_operator":
+                for field in ("addon_module", "params", "risk"):
+                    if field not in item:
+                        raise ValueError(
+                            f"capabilities.json: {capability_id}.{field} is required for blender_operator"
+                        )
+                if not _OPERATOR.fullmatch(item["target"]):
+                    raise ValueError(
+                        f"capabilities.json: {capability_id}.target must be category.name"
+                    )
             self._items[capability_id] = dict(item)
         for capability in self._items.values():
             for dependency in capability.get("dependencies", []):
@@ -91,6 +136,32 @@ class CapabilityRegistry:
             for item in self._items.values()
             if item["enabled"] and item.get("public_tool")
         ]
+
+    def items(self, provider=None, enabled_only=True):
+        return [
+            deepcopy(item)
+            for item in self._items.values()
+            if (not enabled_only or item["enabled"])
+            and (provider is None or item["provider"] == provider)
+        ]
+
+    def generic_capabilities(self):
+        return [
+            deepcopy(item)
+            for item in self._items.values()
+            if item["enabled"]
+            and item["provider"] == "blender_operator"
+            and item.get("expose") == "generic"
+            and all(self._items[dependency]["enabled"] for dependency in item.get("dependencies", []))
+        ]
+
+    def addon_modules(self, enabled_only=True):
+        modules = []
+        for item in self._items.values():
+            module = item.get("addon_module")
+            if module and (not enabled_only or item["enabled"]) and module not in modules:
+                modules.append(module)
+        return modules
 
     def summary(self):
         enabled = [item for item in self._items.values() if item["enabled"]]

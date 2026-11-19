@@ -1,0 +1,5 @@
+<vbom format="proof-v1" run_id="TEST-RUN">
+  <item object="Upper" color="#3366CC" material="Fixture Upper" roughness="0.4" metallic="0.1" />
+  <item object="Sole" color="#EEEEEE" material="Fixture Sole" roughness="0.7" metallic="0.0" />
+  <item object="Laces" color="#CC3333" material="Fixture Laces" roughness="0.5" metallic="0.2" />
+</vbom>

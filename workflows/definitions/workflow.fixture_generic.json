@@ -1,0 +1,33 @@
+{
+  "id": "workflow.fixture_generic",
+  "version": "1.0.0",
+  "inputs": {
+    "model_path": "path",
+    "output_dir": "path",
+    "article_name": "string"
+  },
+  "steps": [
+    {
+      "id": "inspect_article",
+      "capability": "blender.fixture.all_types",
+      "params": {
+        "count": 2,
+        "title": "${inputs.article_name}"
+      }
+    },
+    {
+      "id": "confirm_article",
+      "capability": "blender.fixture.all_types",
+      "params": {
+        "count": 3,
+        "mode": "TWO"
+      }
+    }
+  ],
+  "postconditions": [
+    {
+      "type": "object_count_at_least",
+      "count": 3
+    }
+  ]
+}

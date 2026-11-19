@@ -6,20 +6,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
-from adapters.common import REGISTRY
+from adapters.common import REGISTRY, ROOT
 
 from workflows.mcp_workflow import run_excel_to_blender as execute_workflow
 from workflows.mcp_workflow import create_colored_primitive as execute_primitive
 from workflows.mcp_workflow import system_status as read_system_status
+from workflows.operator_workflow import run_blender_operator as execute_operator
+from workflows.blender_workflow import run_blender_workflow as execute_blender_workflow
 
 AUDIT_LOG = Path(__file__).resolve().parent / "logs" / "mcp-tool-calls.jsonl"
 PUBLIC_TOOLS = REGISTRY.public_tools()
-_IMPLEMENTED_TOOLS = ["system_status", "run_excel_to_blender", "create_colored_primitive"]
-if PUBLIC_TOOLS != _IMPLEMENTED_TOOLS:
-    raise RuntimeError(
-        "Enabled registry tools do not match MCP implementations: "
-        f"registry={PUBLIC_TOOLS}, implemented={_IMPLEMENTED_TOOLS}"
-    )
+_registered = set()
 
 
 def _audit(tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None:
@@ -31,7 +28,15 @@ def _audit(tool: str, arguments: dict[str, Any], result: dict[str, Any]) -> None
         "arguments": arguments,
         "result": {
             key: result.get(key)
-            for key in ("ready", "status", "run_id", "output_path", "primitive", "color_hex")
+            for key in (
+                "ready",
+                "status",
+                "run_id",
+                "output_path",
+                "primitive",
+                "color_hex",
+                "count",
+            )
             if key in result
         },
     }
@@ -49,12 +54,20 @@ mcp = MCPServer(
         "an absolute .xlsx path, an absolute .blend path, and an absolute output directory. "
         "Use create_colored_primitive only when the user explicitly asks to create a cube, "
         "UV sphere, or cylinder and provides an absolute output directory. "
+        "Use list_blender_capabilities to inspect allowlisted add-on operations. "
+        "Use run_blender_operator only with a listed capability id, valid parameters, and absolute paths. "
         "Never invent paths and never report success unless status is completed."
     ),
 )
 
 
-@mcp.tool(structured_output=True)
+def _public_tool(fn):
+    registered = mcp.tool(structured_output=True)(fn)
+    _registered.add(fn.__name__)
+    return registered
+
+
+@_public_tool
 def system_status() -> dict[str, Any]:
     """Check the real local Qwen model, Excel VBA add-in, and Blender add-on. This tool does not process user files."""
     result = read_system_status()
@@ -62,7 +75,7 @@ def system_status() -> dict[str, Any]:
     return result
 
 
-@mcp.tool(structured_output=True)
+@_public_tool
 def run_excel_to_blender(
     excel_path: str, model_path: str, output_dir: str
 ) -> dict[str, Any]:
@@ -77,7 +90,7 @@ def run_excel_to_blender(
     return result
 
 
-@mcp.tool(structured_output=True)
+@_public_tool
 def create_colored_primitive(
     primitive: Literal["cube", "uv_sphere", "cylinder"],
     color_hex: str,
@@ -96,6 +109,86 @@ def create_colored_primitive(
     result = execute_primitive(**arguments)
     _audit("create_colored_primitive", arguments, result)
     return result
+
+
+def _docs(capability: dict[str, Any]) -> tuple[str, str]:
+    relative = capability.get("docs")
+    if not relative:
+        return "", ""
+    path = (ROOT / relative).resolve()
+    knowledge = (ROOT / "knowledge").resolve()
+    if not path.is_relative_to(knowledge) or not path.is_file():
+        return "", ""
+    content = path.read_text(encoding="utf-8-sig")
+    title = next(
+        (line.lstrip("#").strip() for line in content.splitlines() if line.startswith("#")),
+        "",
+    )
+    return title, content[:1500]
+
+
+@_public_tool
+def list_blender_capabilities(query: str = "") -> dict[str, Any]:
+    """List enabled allowlisted Blender add-on operations. Use when the user asks what an add-on can do. Never invent a capability id."""
+    query_text = query.strip().casefold()
+    matches = []
+    for capability in REGISTRY.generic_capabilities():
+        title, excerpt = _docs(capability)
+        searchable = " ".join(
+            (capability["id"], capability.get("description", ""), title)
+        ).casefold()
+        if query_text and query_text not in searchable:
+            continue
+        matches.append(
+            {
+                "id": capability["id"],
+                "description": capability.get("description", ""),
+                "risk": capability["risk"],
+                "params": capability["params"],
+                "docs_excerpt": excerpt,
+                "background_safe": capability.get("background_safe", False),
+            }
+        )
+        if len(matches) == 10:
+            break
+    result = {"ok": True, "query": query, "count": len(matches), "capabilities": matches}
+    _audit("list_blender_capabilities", {"query": query}, result)
+    return result
+
+
+@_public_tool
+def run_blender_operator(
+    capability_id: str,
+    params: dict[str, Any],
+    model_path: str,
+    output_dir: str,
+) -> dict[str, Any]:
+    """Run one listed Blender capability. Use only for an explicit request with valid params and absolute model_path and output_dir. Never invent paths or capability ids."""
+    arguments = {
+        "capability_id": capability_id,
+        "params": params,
+        "model_path": model_path,
+        "output_dir": output_dir,
+    }
+    result = execute_operator(**arguments)
+    _audit("run_blender_operator", arguments, result)
+    return result
+
+
+@_public_tool
+def run_blender_workflow(workflow_id: str, inputs: dict[str, Any]) -> dict[str, Any]:
+    """Run one registered declarative Blender workflow. Use only with a known workflow_id and complete inputs. Never invent workflow ids or interpolation expressions."""
+    arguments = {"workflow_id": workflow_id, "inputs": inputs}
+    result = execute_blender_workflow(**arguments)
+    _audit("run_blender_workflow", arguments, result)
+    return result
+
+
+if set(PUBLIC_TOOLS) != _registered:
+    raise RuntimeError(
+        "Enabled registry tools do not match MCP implementations: "
+        f"registry={PUBLIC_TOOLS}, implemented={sorted(_registered)}"
+    )
 
 
 mcp_http_app = mcp.streamable_http_app(

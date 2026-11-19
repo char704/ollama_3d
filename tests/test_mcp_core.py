@@ -6,6 +6,8 @@ from unittest.mock import Mock, patch
 from fastapi.testclient import TestClient
 
 import api_service
+import manage
+import mcp_server
 from capability_registry import CapabilityRegistry, load_registry
 from project_config import ROOT, load, scoped_path
 from workflows import mcp_workflow
@@ -16,10 +18,12 @@ class ConfigurationTests(unittest.TestCase):
         config = load()
         self.assertEqual(config["mcp"]["path"], "/mcp")
         registry = load_registry(ROOT / config["capability_registry"])
-        self.assertEqual(
-            registry.public_tools(),
-            ["system_status", "run_excel_to_blender", "create_colored_primitive"],
+        self.assertTrue(
+            {"system_status", "run_excel_to_blender", "create_colored_primitive"}.issubset(
+                registry.public_tools()
+            )
         )
+        self.assertEqual(set(registry.public_tools()), mcp_server._registered)
         self.assertEqual(
             registry.require("excel.export_vbom", provider="excel_vba")["target"],
             "'Ollama3DProof.xlam'!ExportVBOM",
@@ -90,6 +94,72 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(body["service"], "ollama3d-local-api")
             self.assertNotIn("blender_agent", body)
             self.assertNotIn("providers", body)
+
+
+class McpRegistrationTests(unittest.TestCase):
+    def test_every_public_tool_is_implemented_and_prompt_uses_registry_instructions(self):
+        config = load()
+        registry = load_registry(ROOT / config["capability_registry"])
+        self.assertEqual(set(registry.public_tools()), mcp_server._registered)
+        prompt = manage.build_system_prompt(registry)
+        self.assertNotIn("đúng ba MCP tool", prompt)
+        for item in registry.items():
+            if item.get("public_tool") and item.get("instructions"):
+                self.assertIn(item["instructions"], prompt)
+
+    @patch.object(mcp_server, "_audit")
+    @patch.object(mcp_server.REGISTRY, "generic_capabilities")
+    def test_list_capabilities_filters_and_reads_bounded_docs(self, generic, _audit):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            root = Path(folder)
+            knowledge = root / "knowledge"
+            knowledge.mkdir()
+            (knowledge / "fixture.md").write_text(
+                "# Fixture Tools\n" + "x" * 2000, encoding="utf-8"
+            )
+            generic.return_value = [
+                {
+                    "id": "blender.fixture.paint",
+                    "description": "Paint the fixture",
+                    "risk": "mutating",
+                    "params": {"type": "object", "properties": {}},
+                    "docs": "knowledge/fixture.md",
+                    "background_safe": True,
+                }
+            ]
+            with patch.object(mcp_server, "ROOT", root):
+                result = mcp_server.list_blender_capabilities("Fixture Tools")
+        self.assertEqual(result["count"], 1)
+        self.assertLessEqual(len(result["capabilities"][0]["docs_excerpt"]), 1500)
+
+    @patch.object(mcp_server, "_audit")
+    @patch.object(mcp_server, "execute_operator")
+    def test_run_operator_tool_delegates_exact_arguments(self, execute, _audit):
+        execute.return_value = {"ok": True, "status": "completed"}
+        result = mcp_server.run_blender_operator(
+            "blender.fixture.paint",
+            {"color": "red"},
+            "E:/model.blend",
+            "E:/outputs",
+        )
+        self.assertTrue(result["ok"])
+        execute.assert_called_once_with(
+            capability_id="blender.fixture.paint",
+            params={"color": "red"},
+            model_path="E:/model.blend",
+            output_dir="E:/outputs",
+        )
+
+    @patch.object(mcp_server, "_audit")
+    @patch.object(mcp_server, "execute_blender_workflow")
+    def test_run_workflow_tool_delegates_exact_arguments(self, execute, _audit):
+        execute.return_value = {"ok": True, "status": "completed"}
+        inputs = {"model_path": "E:/model.blend", "output_dir": "E:/outputs"}
+        result = mcp_server.run_blender_workflow("workflow.fixture_generic", inputs)
+        self.assertTrue(result["ok"])
+        execute.assert_called_once_with(
+            workflow_id="workflow.fixture_generic", inputs=inputs
+        )
 
 
 class WorkflowTests(unittest.TestCase):

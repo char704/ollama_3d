@@ -392,6 +392,20 @@ def ensure_integrations(config):
     )
 
 
+def build_system_prompt(registry):
+    introduction = (
+        "Bạn điều phối các MCP tool cục bộ đã được allowlist. Nếu thiếu đường dẫn hoặc tham số "
+        "bắt buộc, hãy hỏi lại; không tự đoán. Không gọi tool cho câu hỏi giải thích. Chỉ báo "
+        "thành công khi status=completed hoặc kết quả tool xác nhận ok, và luôn nêu output_path khi có."
+    )
+    instructions = [
+        item["instructions"]
+        for item in registry.items()
+        if item.get("public_tool") and item.get("instructions")
+    ]
+    return " ".join([introduction, *instructions, "Trả lời ngắn gọn bằng tiếng Việt."])
+
+
 def sync_webui(config):
     from adapters.common import REGISTRY
 
@@ -451,15 +465,7 @@ def sync_webui(config):
     ] + [connection]
     api("/api/v1/configs/tool_servers", {"TOOL_SERVER_CONNECTIONS": connections})
 
-    system = (
-        "Bạn điều phối đúng ba MCP tool. Dùng system_status chỉ khi người dùng hỏi trạng thái, "
-        "phiên bản hoặc khả năng sẵn sàng. Dùng run_excel_to_blender chỉ khi người dùng yêu cầu "
-        "chạy xử lý và cung cấp đủ ba đường dẫn tuyệt đối: excel_path (.xlsx), model_path (.blend), "
-        "output_dir. Dùng create_colored_primitive khi người dùng yêu cầu tạo cube, UV sphere hoặc "
-        "cylinder có màu và đã cung cấp output_dir tuyệt đối. Nếu thiếu đường dẫn, hãy hỏi lại; "
-        "không tự đoán. Không gọi tool cho câu hỏi "
-        "giải thích. Chỉ báo thành công khi status=completed và luôn nêu output_path. Trả lời ngắn gọn bằng tiếng Việt."
-    )
+    system = build_system_prompt(REGISTRY)
     body = {
         "id": MODEL_ID,
         "base_model_id": config["ollama"]["model"],
@@ -499,13 +505,15 @@ def sync_webui(config):
     api(route, body)
     specs = api(f"/api/v1/tools/id/server:mcp:{server_id}/specs")["specs"]
     expected_tools = REGISTRY.public_tools()
-    if [item["name"] for item in specs] != expected_tools:
-        raise RuntimeError("Open WebUI MCP schema differs from the expected three tools")
-    say("Synced the three-tool MCP model and removed legacy Open WebUI entries.")
+    actual_tools = [item["name"] for item in specs]
+    if len(actual_tools) != len(expected_tools) or set(actual_tools) != set(expected_tools):
+        raise RuntimeError("Open WebUI MCP schema differs from the capability registry")
+    say(f"Synced the {len(expected_tools)}-tool MCP model and removed legacy Open WebUI entries.")
 
 
 def check(config):
     from capability_registry import load_registry
+    from mcp_server import _registered
 
     for line in (ROOT / "requirements.txt").read_text().splitlines():
         if not line or line.startswith("#"):
@@ -528,17 +536,64 @@ def check(config):
         if not path.exists():
             raise FileNotFoundError(f"{label} does not exist: {path}")
     registry = load_registry(resolve(config, config["capability_registry"]))
-    if registry.public_tools() != [
+    original_tools = {
         "system_status",
         "run_excel_to_blender",
         "create_colored_primitive",
-    ]:
-        raise RuntimeError("Capability registry public tools do not match this release")
+    }
+    if not original_tools.issubset(_registered):
+        raise RuntimeError("One or more original MCP tools are missing")
+    if set(registry.public_tools()) != _registered:
+        raise RuntimeError("Capability registry public tools do not match MCP implementations")
     data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
     say("Configuration, dependencies, and integration files: OK")
 
 
+def discover_addons(config, requested_modules, write_proposals=False):
+    from adapters.blender_mcp import BlenderMcpAdapter
+    from capability_discovery import propose_entries
+    from capability_registry import load_registry
+
+    registry = load_registry(resolve(config, config["capability_registry"]))
+    modules = requested_modules or registry.addon_modules()
+    configured_module = config["blender_addon"]["module"]
+    if configured_module not in modules:
+        modules.append(configured_module)
+    modules = list(dict.fromkeys(modules))
+    directory = ROOT / "runtime" / "discovered"
+    report = BlenderMcpAdapter().discover(modules, directory)
+    for module in modules:
+        module_report = {
+            **report,
+            "modules": [module],
+            "operators": [
+                item for item in report["operators"] if item["addon_module"] == module
+            ],
+        }
+        module_report["operator_count"] = len(module_report["operators"])
+        module_report["operator_ids"] = [
+            item["bl_idname"] for item in module_report["operators"]
+        ]
+        path = directory / f"{module}.json"
+        path.write_text(
+            json.dumps(module_report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        say(f"Discovered {module_report['operator_count']} operators: {path}")
+    proposals = propose_entries(report, registry)
+    if write_proposals:
+        proposal_path = directory / "proposals.json"
+        proposal_path.write_text(
+            json.dumps(proposals, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        say(f"Wrote {len(proposals)} disabled proposals: {proposal_path}")
+    else:
+        say(json.dumps(proposals, ensure_ascii=False, indent=2))
+    return 0
+
+
 def status(config):
+    from capability_registry import load_registry
+
     healthy = True
     for name, path in (("ollama", "/api/tags"), ("api", "/health"), ("webui", "/health")):
         url = service_url(config, name)
@@ -568,7 +623,8 @@ def status(config):
         except (httpx.HTTPError, ValueError) as exc:
             healthy = False
             say(f"{name}: NOT READY  {url} ({exc})")
-    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: 3")
+    tool_count = len(load_registry(resolve(config, config["capability_registry"])).public_tools())
+    say(f"Profile: {config['profile']}; model: {config['ollama']['model']}; MCP tools: {tool_count}")
     say(f"Inputs: {data_path(config, 'inputs')}\nOutputs: {data_path(config, 'outputs')}")
     return 0 if healthy else 1
 
@@ -577,9 +633,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=("start", "stop", "status", "check", "install", "sync", "api", "restart-api"),
+        choices=(
+            "start",
+            "stop",
+            "status",
+            "check",
+            "install",
+            "sync",
+            "api",
+            "restart-api",
+            "discover",
+        ),
     )
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--module", action="append", default=[])
+    parser.add_argument("--write-proposals", action="store_true")
     args = parser.parse_args()
     if args.action == "stop":
         stop_service("webui")
@@ -592,6 +660,8 @@ def main():
     check(config)
     if args.action == "check":
         return 0
+    if args.action == "discover":
+        return discover_addons(config, args.module, args.write_proposals)
     if args.action == "sync":
         sync_webui(config)
         return 0

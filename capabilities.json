@@ -7,6 +7,7 @@
       "handler": "system_status",
       "public_tool": "system_status",
       "target": "local.readiness",
+      "instructions": "Dùng system_status chỉ khi người dùng hỏi trạng thái, phiên bản hoặc khả năng sẵn sàng.",
       "enabled": true
     },
     {
@@ -34,6 +35,35 @@
       "enabled": true
     },
     {
+      "id": "blender.ollama3d_proof.apply_vbom",
+      "provider": "blender_operator",
+      "handler": "generic_operator",
+      "target": "ollama3d_proof.apply_vbom",
+      "addon_module": "ollama3d_proof_addon",
+      "description": "Apply a validated proof-v1 VBOM file to the three footwear meshes.",
+      "risk": "filesystem",
+      "params": {
+        "type": "object",
+        "properties": {
+          "filepath": {
+            "type": "string",
+            "x-path": true
+          },
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "filepath",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "expose": "generic",
+      "background_safe": true,
+      "enabled": true
+    },
+    {
       "id": "workflow.excel_to_blender",
       "provider": "workflow",
       "handler": "run_excel_to_blender",
@@ -43,6 +73,7 @@
         "excel.export_vbom",
         "blender.apply_vbom"
       ],
+      "instructions": "Dùng run_excel_to_blender chỉ cho yêu cầu xử lý rõ ràng có đủ excel_path, model_path và output_dir tuyệt đối.",
       "enabled": true
     },
     {
@@ -60,6 +91,37 @@
         "minimum_size": 0.01,
         "maximum_size": 100
       },
+      "instructions": "Dùng create_colored_primitive khi người dùng yêu cầu cube, UV sphere hoặc cylinder có màu và đã cung cấp output_dir tuyệt đối.",
+      "enabled": true
+    },
+    {
+      "id": "workflow.list_blender_capabilities",
+      "provider": "workflow",
+      "handler": "list_blender_capabilities",
+      "public_tool": "list_blender_capabilities",
+      "target": "workflow.list_blender_capabilities",
+      "description": "List enabled generic Blender add-on capabilities and their parameter schemas.",
+      "instructions": "Dùng list_blender_capabilities khi người dùng hỏi add-on Blender đang có chức năng gì; không tự bịa capability_id.",
+      "enabled": true
+    },
+    {
+      "id": "workflow.run_blender_operator",
+      "provider": "workflow",
+      "handler": "run_blender_operator",
+      "public_tool": "run_blender_operator",
+      "target": "workflow.run_blender_operator",
+      "description": "Run one enabled allowlisted Blender operator through the generic verified workflow.",
+      "instructions": "Chỉ dùng run_blender_operator sau khi có capability_id hợp lệ, params đúng schema, model_path .blend và output_dir tuyệt đối; nếu thiếu phải hỏi lại.",
+      "enabled": true
+    },
+    {
+      "id": "workflow.run_blender_workflow",
+      "provider": "workflow",
+      "handler": "run_blender_workflow",
+      "public_tool": "run_blender_workflow",
+      "target": "workflow.run_blender_workflow",
+      "description": "Run a registered declarative multi-step Blender workflow in one verified session.",
+      "instructions": "Chỉ dùng run_blender_workflow với workflow_id đã đăng ký và inputs đầy đủ; không tự tạo workflow_id hoặc biểu thức nội suy.",
       "enabled": true
     }
   ]
