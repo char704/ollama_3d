@@ -1,4 +1,4 @@
-"""Small local Ollama agent for deterministic Excel and Blender workflows."""
+"""Small local Ollama agent that does not depend on MCP."""
 
 
 def handle(message):

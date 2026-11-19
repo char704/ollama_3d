@@ -6,7 +6,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from adapters.blender import BlenderAdapter
+from adapters.blender_mcp import BlenderMcpAdapter
 from adapters.common import CONFIG, REGISTRY, log, write_json
 from capability_discovery import validate_params
 from project_config import data_path, scoped_path
@@ -69,7 +69,7 @@ def run_blender_operator(capability_id, params, model_path, output_dir):
         output_path = run_directory / "result.blend"
         report_path = run_directory / "blender-operator-proof.json"
         try:
-            result = BlenderAdapter().run_operator(
+            result = BlenderMcpAdapter().run_operator(
                 capability,
                 normalized_params,
                 model_path,

@@ -1,1 +1,1 @@
-"""Deterministic local workflows for Excel and Blender automation."""
+"""Deterministic workflow exposed through the local MCP server."""

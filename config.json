@@ -1,5 +1,5 @@
 {
-  "profile": "direct-automation",
+  "profile": "mcp-proof",
   "capability_registry": "capabilities.json",
   "paths": {
     "inputs": "inputs",
@@ -9,6 +9,8 @@
     "allowed_roots": []
   },
   "services": {
+    "api_port": 8090,
+    "webui_port": 8080,
     "ollama_url": "http://127.0.0.1:11434"
   },
   "ollama": {
@@ -18,6 +20,10 @@
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
   },
+  "mcp": {
+    "path": "/mcp",
+    "server_id": "ollama3d"
+  },
   "excel_vba": {
     "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
     "addin_path": "excel/Ollama3DProof.xlam",
@@ -26,7 +32,15 @@
   "blender_addon": {
     "module": "ollama3d_proof_addon",
     "package": "dist/ollama3d_proof_addon.zip",
+    "transport": "subprocess",
     "timeout_seconds": 180
+  },
+  "official_blender_mcp": {
+    "version": "1.0.3",
+    "host": "127.0.0.1",
+    "package": "runtime/vendor/mcp-1.0.3.zip",
+    "download_url": "https://projects.blender.org/lab/blender_mcp/releases/download/v1.0.3/mcp-1.0.3.zip",
+    "sha256": "a7a9da816192502e5a0a202a396444e266b47d8fc4f74ad4698048bd43040707"
   },
   "workflow": {
     "max_concurrent_runs": 1

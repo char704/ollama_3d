@@ -1,4 +1,4 @@
-"""Route a user message to deterministic local Ollama3D workflows."""
+"""Route a user message to deterministic Ollama3D workflows without MCP."""
 
 import argparse
 import json
@@ -12,11 +12,7 @@ from adapters.common import CONFIG, REGISTRY, ROOT
 from capability_discovery import validate_params
 from project_config import service_url
 from workflows.blender_workflow import run_blender_workflow
-from workflows.core_workflow import (
-    create_colored_primitive,
-    run_excel_to_blender,
-    system_status,
-)
+from workflows.mcp_workflow import system_status
 from workflows.operator_workflow import run_blender_operator
 
 ROUTER_SCHEMA = {
@@ -61,37 +57,6 @@ def retrieve_candidates(message, intent, limit=5):
     query_words = _words(message)
     candidates = []
     if intent == "run_operator":
-        candidates.append(
-            {
-                "kind": "core_operator",
-                "id": "blender.create_colored_primitive",
-                "description": (
-                    "Create a colored cube, UV sphere, or cylinder and save a verified "
-                    "Blender file."
-                ),
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "primitive": {
-                            "type": "string",
-                            "enum": ["cube", "uv_sphere", "cylinder"],
-                        },
-                        "color_hex": {"type": "string"},
-                        "size": {"type": "number"},
-                        "object_name": {"type": "string"},
-                    },
-                    "required": ["primitive", "color_hex"],
-                    "additionalProperties": False,
-                },
-                "risk": "filesystem",
-                "docs": "",
-                "requires_model_path": False,
-                "score": len(
-                    query_words
-                    & _words("create colored primitive cube sphere cylinder tạo khối màu")
-                ),
-            }
-        )
         for item in REGISTRY.generic_capabilities():
             docs = _read_docs(item.get("docs"))
             text = " ".join((item["id"], item.get("description", ""), docs))
@@ -103,36 +68,10 @@ def retrieve_candidates(message, intent, limit=5):
                     "schema": item["params"],
                     "risk": item["risk"],
                     "docs": docs,
-                    "requires_model_path": True,
                     "score": len(query_words & _words(text)),
                 }
             )
     elif intent == "run_workflow":
-        candidates.append(
-            {
-                "kind": "core_workflow",
-                "id": "workflow.excel_to_blender",
-                "description": (
-                    "Export a footwear BOM through the Excel VBA add-in, apply the VBOM "
-                    "through the Blender add-on, and save a verified Blender file."
-                ),
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "excel_path": {"type": "string"},
-                        "model_path": {"type": "string"},
-                        "output_dir": {"type": "string"},
-                    },
-                    "required": ["excel_path", "model_path", "output_dir"],
-                    "additionalProperties": False,
-                },
-                "docs": "",
-                "score": len(
-                    query_words
-                    & _words("Excel BOM VBA add-in Blender footwear bảng tính quy trình")
-                ),
-            }
-        )
         for item in REGISTRY.workflows():
             text = " ".join((item["id"], item.get("description", "")))
             candidates.append(
@@ -343,10 +282,6 @@ class Agent:
                 name for name in candidate["schema"].get("required", []) if name not in params
             ]
             for name in ("model_path", "output_dir"):
-                if name == "model_path" and not candidate.get(
-                    "requires_model_path", True
-                ):
-                    continue
                 if not selection.get(name):
                     missing.append(name)
             if missing:
@@ -355,32 +290,18 @@ class Agent:
                 validate_params(candidate["schema"], params, CONFIG)
             except ValueError as exc:
                 return self._needs_input(intent, candidate_id, [str(exc)], candidates, calls)
-            if candidate["kind"] == "core_operator":
-                result = create_colored_primitive(
-                    params["primitive"],
-                    params["color_hex"],
-                    selection["output_dir"],
-                    params.get("size", 2.0),
-                    params.get("object_name", "QwenPrimitive"),
-                )
-            else:
-                result = run_blender_operator(
-                    candidate_id,
-                    params,
-                    selection["model_path"],
-                    selection["output_dir"],
-                )
+            result = run_blender_operator(
+                candidate_id,
+                params,
+                selection["model_path"],
+                selection["output_dir"],
+            )
         else:
             inputs = selection.get("inputs") if isinstance(selection.get("inputs"), dict) else {}
             missing = [name for name in candidate["schema"]["required"] if not inputs.get(name)]
             if missing:
                 return self._needs_input(intent, candidate_id, missing, candidates, calls)
-            if candidate["kind"] == "core_workflow":
-                result = run_excel_to_blender(
-                    inputs["excel_path"], inputs["model_path"], inputs["output_dir"]
-                )
-            else:
-                result = run_blender_workflow(candidate_id, inputs)
+            result = run_blender_workflow(candidate_id, inputs)
         completed = result.get("status") == "completed"
         output_path = result.get("output_path")
         message_text = (
@@ -424,7 +345,7 @@ def handle(message):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the local Ollama3D agent")
+    parser = argparse.ArgumentParser(description="Run the local Ollama3D agent without MCP")
     parser.add_argument("message", nargs="+", help="Vietnamese request to route")
     args = parser.parse_args()
     try:

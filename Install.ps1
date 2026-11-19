@@ -1,3 +1,4 @@
+param([switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
@@ -32,7 +33,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Python environment creation failed.' }
     }
     & $python -c 'import sys; assert sys.version_info[:2] == (3,12), "Python 3.12 is required"'
-    if ($LASTEXITCODE -ne 0) { throw 'Existing Python environment is invalid. Keep inputs and rebuild .venv on this machine.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Existing Python environment is invalid. Keep webui-data and inputs; rebuild .venv on this machine.' }
     & $uv pip install --python $python --requirement (Join-Path $root 'requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
 
@@ -60,11 +61,16 @@ try {
         $config.paths.blender_exe = $blenderPath
         $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
     }
-    Write-Host 'Blender transport: subprocess using the installed add-on.'
+    if ($config.blender_addon.transport -eq 'official_mcp') {
+        Write-Host 'Blender transport: optional official MCP extension.'
+    } else {
+        Write-Host 'Blender transport: subprocess (no Blender MCP extension required).'
+    }
     $arguments = @((Join-Path $root 'manage.py'), 'install')
+    if ($NoBrowser) { $arguments += '--no-browser' }
     & $python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'Setup did not finish. See the error above and logs folder.' }
-    Write-Host 'Setup complete. Run the agent with: .\.venv\Scripts\python.exe -m agent.run "your request"'
+    Write-Host 'Setup complete. Next time, use Open-WebUI.cmd.'
 } catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
