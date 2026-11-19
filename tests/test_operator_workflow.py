@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from adapters.blender_mcp import BlenderMcpAdapter
+from adapters.blender import BlenderAdapter
 from adapters.common import BLENDER, REGISTRY
 from project_config import ROOT
 from workflows import operator_workflow
@@ -33,7 +33,7 @@ GENERIC_CAPABILITY = {
 
 class OperatorWorkflowTests(unittest.TestCase):
     @patch.object(operator_workflow, "log")
-    @patch.object(operator_workflow.BlenderMcpAdapter, "run_operator")
+    @patch.object(operator_workflow.BlenderAdapter, "run_operator")
     @patch.object(operator_workflow.REGISTRY, "require")
     @patch.object(operator_workflow, "scoped_path")
     def test_operator_workflow_writes_verification(
@@ -126,7 +126,7 @@ class BlenderOperatorRegressionTests(unittest.TestCase):
         vbom = ROOT / "tests" / "fixtures" / "proof_v1.vbom.xml"
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             folder = Path(folder)
-            adapter = BlenderMcpAdapter()
+            adapter = BlenderAdapter()
             generic_output = folder / "generic.blend"
             generic_report = folder / "generic-report.json"
             generic = adapter.run_operator(
@@ -192,7 +192,7 @@ class BlenderOperatorRegressionTests(unittest.TestCase):
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
             shutil.copytree(proof_addon, addons / proof_addon.name)
-            adapter = BlenderMcpAdapter()
+            adapter = BlenderAdapter()
             capability = {
                 "addon_module": "ollama3d_fixture_addon",
                 "target": "ollama3d_fixture.poll_false",

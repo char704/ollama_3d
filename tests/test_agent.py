@@ -77,14 +77,63 @@ class AgentTests(unittest.TestCase):
             ],
         )
 
+    def test_colored_primitive_calls_direct_blender_workflow(self):
+        output = str(ROOT / "outputs")
+        client = FakeClient(
+            {"intent": "run_operator"},
+            {
+                "candidate_id": "blender.create_colored_primitive",
+                "params": {
+                    "primitive": "cube",
+                    "color_hex": "#336699",
+                    "size": 3.0,
+                    "object_name": "DirectCube",
+                },
+                "model_path": None,
+                "output_dir": output,
+            },
+        )
+        completed = {"ok": True, "status": "completed", "output_path": "cube.blend"}
+        with patch.object(
+            agent_run, "create_colored_primitive", return_value=completed
+        ) as execute:
+            result = agent_run.Agent(client).handle("Tạo cube màu #336699")
+        self.assertEqual(result["status"], "completed")
+        execute.assert_called_once_with(
+            "cube", "#336699", output, 3.0, "DirectCube"
+        )
+
+    def test_excel_addin_workflow_is_called_directly(self):
+        excel = str(ROOT / "inputs" / "Footwear_BOM.xlsx")
+        model = str(ROOT / "inputs" / "Sneaker_Unassigned.blend")
+        output = str(ROOT / "outputs")
+        client = FakeClient(
+            {"intent": "run_workflow"},
+            {
+                "candidate_id": "workflow.excel_to_blender",
+                "inputs": {
+                    "excel_path": excel,
+                    "model_path": model,
+                    "output_dir": output,
+                },
+            },
+        )
+        completed = {"ok": True, "status": "completed", "output_path": "result.blend"}
+        with patch.object(
+            agent_run, "run_excel_to_blender", return_value=completed
+        ) as execute:
+            result = agent_run.Agent(client).handle("Chạy Excel BOM sang Blender")
+        self.assertEqual(result["status"], "completed")
+        execute.assert_called_once_with(excel, model, output)
+
     def test_chat_uses_router_and_utility_model_without_tools(self):
-        client = FakeClient({"intent": "chat"}, {"answer": "MCP là một giao thức."})
+        client = FakeClient({"intent": "chat"}, {"answer": "VBOM mô tả vật liệu."})
         with patch.object(agent_run, "run_blender_operator") as operator, patch.object(
             agent_run, "run_blender_workflow"
         ) as workflow:
-            result = agent_run.Agent(client).handle("MCP là gì?")
+            result = agent_run.Agent(client).handle("VBOM là gì?")
         self.assertEqual(result["status"], "chat")
-        self.assertEqual(result["message"], "MCP là một giao thức.")
+        self.assertEqual(result["message"], "VBOM mô tả vật liệu.")
         self.assertEqual(
             [call["model"] for call in client.calls],
             [
@@ -137,10 +186,9 @@ class AgentTests(unittest.TestCase):
         self.assertFalse(body["stream"])
         self.assertFalse(metadata["think"])
 
-    def test_agent_source_does_not_import_mcp_runtime(self):
+    def test_agent_source_only_uses_local_workflows(self):
         source = Path(agent_run.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("import mcp_server", source)
-        self.assertNotIn("from mcp", source)
+        self.assertIn("from workflows.core_workflow import", source)
 
 
 if __name__ == "__main__":

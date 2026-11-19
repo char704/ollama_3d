@@ -1,4 +1,4 @@
-"""Proof workflow used by both MCP and the local HTTP diagnostic endpoint."""
+"""Deterministic Excel add-in and Blender add-on workflows."""
 
 import datetime
 import hashlib
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-from adapters.blender_mcp import BlenderMcpAdapter
+from adapters.blender import BlenderAdapter
 from adapters.common import CONFIG, REGISTRY, ROOT, log, write_json
 from adapters.excel_vba import ExcelVbaAdapter
 from project_config import data_path, scoped_path, service_url
@@ -34,7 +34,6 @@ def system_status():
         "ok": True,
         "ready": False,
         "service": {
-            "mcp_path": CONFIG["mcp"]["path"],
             "profile": CONFIG["profile"],
             "registry": REGISTRY.summary(),
         },
@@ -52,7 +51,7 @@ def system_status():
     except Exception as exc:
         status["excel"] = _failure("EXCEL_NOT_READY", str(exc))
     try:
-        status["blender"] = BlenderMcpAdapter().status(probe_directory)
+        status["blender"] = BlenderAdapter().status(probe_directory)
     except Exception as exc:
         status["blender"] = _failure("BLENDER_NOT_READY", str(exc))
     status["ready"] = bool(
@@ -62,7 +61,7 @@ def system_status():
         and status["blender"].get("transport_callable")
     )
     status["ok"] = status["ready"]
-    log("mcp_system_status", {"result": status})
+    log("system_status", {"result": status})
     return status
 
 
@@ -108,7 +107,7 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
         write_json(state_path, state)
         output_path = run_directory / "result.blend"
         blender_proof = run_directory / "blender-proof.json"
-        applied = BlenderMcpAdapter().apply(
+        applied = BlenderAdapter().apply(
             exported["vbom_path"], model_path, output_path, blender_proof, run_id
         )
         state["steps"].append({"id": state["current_step"], "status": "completed", "result": applied})
@@ -152,7 +151,7 @@ def run_excel_to_blender(excel_path, model_path, output_dir):
     finally:
         write_json(state_path, state)
         _workflow_lock.release()
-    log("mcp_run_excel_to_blender", {"arguments": state["input"], "result": state})
+    log("run_excel_to_blender", {"arguments": state["input"], "result": state})
     return state
 
 
@@ -183,7 +182,7 @@ def create_colored_primitive(primitive, color_hex, output_dir, size=2.0, object_
     run_directory.mkdir()
     output_path = run_directory / f"{primitive}.blend"
     report_path = run_directory / "primitive-proof.json"
-    result = BlenderMcpAdapter().create_colored_primitive(
+    result = BlenderAdapter().create_colored_primitive(
         primitive,
         color_hex,
         float(size),
@@ -193,7 +192,7 @@ def create_colored_primitive(primitive, color_hex, output_dir, size=2.0, object_
         run_id,
     )
     log(
-        "mcp_create_colored_primitive",
+        "create_colored_primitive",
         {
             "arguments": {
                 "primitive": primitive,

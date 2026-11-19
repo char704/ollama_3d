@@ -9,7 +9,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab_mcp_runner import (
+from blender_runner import (
     apply_vbom,
     create_colored_primitive,
     discover,

@@ -1,4 +1,4 @@
-"""Validated configuration shared by the MCP server and local launcher."""
+"""Validated configuration for the local Ollama, Excel, and Blender agent."""
 
 import json
 import os
@@ -19,13 +19,6 @@ def load(path=None):
         raise ValueError("config.json: profile must be a non-empty string")
     if not isinstance(config.get("capability_registry"), str) or not config["capability_registry"].strip():
         raise ValueError("config.json: capability_registry is required")
-    for key in ("api_port", "webui_port"):
-        value = config.get("services", {}).get(key)
-        if type(value) is not int or not 1024 <= value <= 65535:
-            raise ValueError(f"config.json: invalid {key}")
-    if config["services"]["api_port"] == config["services"]["webui_port"]:
-        raise ValueError("API and WebUI ports must be different")
-
     parsed = urlparse(config["services"].get("ollama_url", ""))
     if (
         parsed.scheme != "http"
@@ -37,12 +30,6 @@ def load(path=None):
         or parsed.path not in ("", "/")
     ):
         raise ValueError("ollama_url must be a local HTTP base URL")
-    if (parsed.port or 80) in (
-        config["services"]["api_port"],
-        config["services"]["webui_port"],
-    ):
-        raise ValueError("Ollama, API and WebUI must use different ports")
-
     ollama = config.get("ollama", {})
     for key in (
         "model",
@@ -53,12 +40,6 @@ def load(path=None):
     ):
         if not isinstance(ollama.get(key), str) or not ollama[key].strip():
             raise ValueError(f"config.json: ollama.{key} is required")
-
-    mcp = config.get("mcp", {})
-    if mcp.get("path") != "/mcp" or not re.fullmatch(
-        r"[a-z][a-z0-9_-]{1,63}", mcp.get("server_id", "")
-    ):
-        raise ValueError("config.json: invalid MCP configuration")
 
     excel = config.get("excel_vba", {})
     for key in ("executable", "addin_path"):
@@ -74,23 +55,6 @@ def load(path=None):
         raise ValueError("config.json: blender_addon.module is invalid")
     if type(addon.get("timeout_seconds")) is not int or not 30 <= addon["timeout_seconds"] <= 600:
         raise ValueError("config.json: blender_addon.timeout_seconds is invalid")
-    if addon.get("transport", "subprocess") not in ("subprocess", "official_mcp"):
-        raise ValueError("config.json: blender_addon.transport is invalid")
-
-    bridge = config.get("official_blender_mcp", {})
-    if addon.get("transport", "subprocess") == "official_mcp":
-        if bridge.get("host") != "127.0.0.1":
-            raise ValueError("config.json: official_blender_mcp.host must be 127.0.0.1")
-        if not re.fullmatch(r"\d+\.\d+\.\d+", bridge.get("version", "")):
-            raise ValueError("config.json: official_blender_mcp.version is invalid")
-        if not isinstance(bridge.get("package"), str) or not bridge["package"].strip():
-            raise ValueError("config.json: official_blender_mcp.package is required")
-        download = urlparse(bridge.get("download_url", ""))
-        if download.scheme != "https" or download.hostname != "projects.blender.org":
-            raise ValueError("config.json: official_blender_mcp.download_url is invalid")
-        if not re.fullmatch(r"[0-9a-f]{64}", bridge.get("sha256", "")):
-            raise ValueError("config.json: official_blender_mcp.sha256 is invalid")
-
     paths = config.get("paths", {})
     for key in ("inputs", "outputs", "default_model", "blender_exe"):
         if not isinstance(paths.get(key), str) or not paths[key].strip():
@@ -112,9 +76,9 @@ def data_path(config, key):
 
 
 def service_url(config, name):
-    if name == "ollama":
-        return config["services"]["ollama_url"].rstrip("/")
-    return f"http://127.0.0.1:{config['services'][name + '_port']}"
+    if name != "ollama":
+        raise ValueError(f"Unknown local service: {name}")
+    return config["services"]["ollama_url"].rstrip("/")
 
 
 def scoped_path(config, value, default=None):
@@ -134,7 +98,7 @@ def scoped_path(config, value, default=None):
         )
     if path.is_relative_to(root) and any(
         part.startswith(".")
-        or part.casefold() in ("webui-data", "runtime", "archive", "logs")
+        or part.casefold() in ("runtime", "archive", "logs")
         for part in path.relative_to(root).parts
     ):
         raise ValueError("This directory is reserved for application data")
