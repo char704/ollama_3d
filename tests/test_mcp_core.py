@@ -183,7 +183,7 @@ class WorkflowTests(unittest.TestCase):
                     "output_path": str(output_path),
                     "proof_path": str(report_path),
                     "verified_after_reopen": True,
-                    "transport": "official-blender-mcp",
+                    "transport": "blender-subprocess",
                 }
 
             create.side_effect = create_result
@@ -231,7 +231,7 @@ class WorkflowTests(unittest.TestCase):
                 return {
                     "ok": True,
                     "producer": "ollama3d-blender-addon",
-                    "transport": "official-blender-mcp",
+                    "transport": "blender-subprocess",
                     "run_id": run_id,
                     "verified_after_reopen": True,
                 }
@@ -247,7 +247,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(Path(result["output_path"]).is_file())
             self.assertTrue(Path(result["evidence"]["verification"]).is_file())
             verification = Path(result["evidence"]["verification"]).read_text(encoding="utf-8")
-            self.assertIn('"blender_transport": "official-blender-mcp"', verification)
+            self.assertIn('"blender_transport": "blender-subprocess"', verification)
 
     @patch.object(mcp_workflow, "log")
     @patch.object(mcp_workflow.BlenderMcpAdapter, "status")
@@ -263,7 +263,7 @@ class WorkflowTests(unittest.TestCase):
         excel_status.return_value = {"macro_callable": True}
         blender_status.return_value = {
             "operator_callable": True,
-            "official_mcp_callable": True,
+            "transport_callable": True,
         }
         self.assertTrue(mcp_workflow.system_status()["ready"])
 

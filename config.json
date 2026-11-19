@@ -30,6 +30,7 @@
   "blender_addon": {
     "module": "ollama3d_proof_addon",
     "package": "dist/ollama3d_proof_addon.zip",
+    "transport": "subprocess",
     "timeout_seconds": 180
   },
   "official_blender_mcp": {

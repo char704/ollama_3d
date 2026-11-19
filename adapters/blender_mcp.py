@@ -22,18 +22,23 @@ def _b64(value):
 
 
 class BlenderMcpAdapter:
-    """Run approved operations through the official local Blender MCP bridge."""
+    """Run approved operations in a short-lived local Blender process."""
 
     def __init__(self):
         addon = CONFIG["blender_addon"]
-        bridge = CONFIG["official_blender_mcp"]
+        bridge = CONFIG.get("official_blender_mcp", {})
         self.module = addon["module"]
+        self.transport = addon.get("transport", "subprocess")
         self.operator = REGISTRY.require(
             "blender.apply_vbom", provider="blender_addon", handler="apply_vbom"
         )["target"]
         self.timeout = addon.get("timeout_seconds", 180)
-        self.host = bridge["host"]
-        self.extension_version = bridge["version"]
+        self.host = bridge.get("host", "127.0.0.1")
+        self.extension_version = bridge.get("version")
+
+    @property
+    def transport_name(self):
+        return "official-blender-mcp" if self.transport == "official_mcp" else "blender-subprocess"
 
     @staticmethod
     def _free_port(host):
@@ -59,6 +64,95 @@ class BlenderMcpAdapter:
             ]
         )
         return command
+
+    def _subprocess_command(
+        self, job_path, result_path, model_path=None, modules=None, factory_startup=False
+    ):
+        command = [str(BLENDER), "--background"]
+        if factory_startup:
+            command.append("--factory-startup")
+        if model_path is not None:
+            command.append(str(model_path))
+        addon_modules = modules if modules is not None else [self.module]
+        command.extend(
+            [
+                "--addons",
+                ",".join(addon_modules),
+                "--python-exit-code",
+                "1",
+                "--python",
+                str(ROOT / "blender" / "job_entry.py"),
+                "--",
+                str(job_path),
+                str(result_path),
+            ]
+        )
+        return command
+
+    def _run_job(
+        self, operation, payload, log_path, model_path=None, timeout=None, modules=None
+    ):
+        timeout = timeout or self.timeout
+        payload = dict(payload)
+        payload["transport"] = (
+            self.transport_name
+        )
+        if self.transport == "official_mcp":
+            allowed = {
+                "apply_vbom",
+                "create_colored_primitive",
+                "discover",
+                "run_operator",
+                "run_steps",
+                "status",
+            }
+            if operation not in allowed:
+                raise ValueError("Unsupported Blender job operation: " + operation)
+            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
+            runner_directory = _b64(str((ROOT / "blender").resolve()))
+            code = (
+                "import base64, json, sys\n"
+                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
+                f"from lab_mcp_runner import {operation}\n"
+                f"result = {operation}(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
+            )
+            return self._execute(
+                code, log_path, model_path=model_path, timeout=timeout, modules=modules
+            )
+        if self.transport != "subprocess":
+            raise ValueError("Unsupported Blender transport: " + str(self.transport))
+
+        job_directory = ROOT / "runtime" / "blender-jobs"
+        job_directory.mkdir(parents=True, exist_ok=True)
+        job_id = uuid.uuid4().hex
+        job_path = job_directory / f"{job_id}.job.json"
+        result_path = job_directory / f"{job_id}.result.json"
+        job_path.write_text(
+            json.dumps({"operation": operation, "payload": payload}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with Path(log_path).open("w", encoding="utf-8") as stream:
+                completed = subprocess.run(
+                    self._subprocess_command(
+                        job_path, result_path, model_path=model_path, modules=modules
+                    ),
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    env=os.environ.copy(),
+                    timeout=timeout,
+                    check=False,
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Blender subprocess exceeded the timeout") from exc
+        if not result_path.is_file():
+            raise RuntimeError(f"Blender subprocess exited with code {completed.returncode} without a result")
+        envelope = json.loads(result_path.read_text(encoding="utf-8"))
+        if completed.returncode != 0 or not envelope.get("ok"):
+            raise RuntimeError(envelope.get("error", f"Blender subprocess exited with code {completed.returncode}"))
+        return envelope["result"]
 
     @staticmethod
     def _request(host, port, code, process, timeout):
@@ -132,46 +226,38 @@ class BlenderMcpAdapter:
                 "report_path": str(report_path),
                 "run_id": run_id,
             }
-            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
-            runner_directory = _b64(str((ROOT / "blender").resolve()))
-            code = (
-                "import base64, json, sys\n"
-                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
-                "from lab_mcp_runner import discover\n"
-                f"result = discover(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
-            )
-            result = self._execute(
-                code,
-                directory / "blender-mcp-discovery.log",
+            result = self._run_job(
+                "discover",
+                payload,
+                directory / "blender-subprocess-discovery.log",
                 timeout=self.timeout,
                 modules=modules,
             )
             if not report_path.is_file():
-                raise RuntimeError("Blender MCP did not create the discovery report")
+                raise RuntimeError("Blender job did not create the discovery report")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if result.get("run_id") != run_id or report.get("run_id") != run_id:
-                raise RuntimeError("Blender MCP discovery report does not match the current run")
+                raise RuntimeError("Blender discovery report does not match the current run")
             return report
         finally:
             _lock.release()
 
     def status(self, directory):
         directory = Path(directory)
-        group, action = self.operator.split(".", 1)
-        code = (
-            "import bpy\n"
-            f"result={{'blender_version': bpy.app.version_string, "
-            f"'operator_callable': hasattr(bpy.ops.{group}, '{action}')}}"
+        result = self._run_job(
+            "status",
+            {"operator": self.operator},
+            directory / "blender-subprocess-status.log",
+            timeout=60,
         )
-        result = self._execute(code, directory / "blender-mcp-status.log", timeout=60)
         if not result.get("operator_callable"):
             raise RuntimeError(f"Blender operator is not callable: {self.operator}")
         return {
             "installed": True,
             "addon_loaded": True,
-            "official_mcp_callable": True,
-            "transport": "official-blender-mcp",
-            "mcp_extension_version": self.extension_version,
+            "transport_callable": True,
+            "official_mcp_callable": self.transport == "official_mcp",
+            "mcp_extension_version": self.extension_version if self.transport == "official_mcp" else None,
             "operator": self.operator,
             "executable": str(BLENDER),
             **result,
@@ -188,29 +274,25 @@ class BlenderMcpAdapter:
                 "run_id": run_id,
                 "operator": self.operator,
             }
-            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
-            runner_directory = _b64(str((ROOT / "blender").resolve()))
-            code = (
-                "import base64, json, sys\n"
-                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
-                "from lab_mcp_runner import apply_vbom\n"
-                f"result = apply_vbom(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
-            )
-            result = self._execute(
-                code, Path(report_path).with_name("blender-mcp.log"), model_path=model_path
+            result = self._run_job(
+                "apply_vbom",
+                payload,
+                Path(report_path).with_name("blender-subprocess.log"),
+                model_path=model_path,
             )
             if not Path(output_path).is_file() or not Path(report_path).is_file():
-                raise RuntimeError("Blender MCP did not create the model and proof report")
+                raise RuntimeError("Blender job did not create the model and proof report")
             if (
                 not result.get("ok")
                 or result.get("producer") != "ollama3d-blender-addon"
                 or result.get("run_id") != run_id
                 or result.get("operator") != self.operator
                 or not result.get("verified_after_reopen")
+                or result.get("transport") != self.transport_name
                 or result.get("output_sha256")
                 != hashlib.sha256(Path(output_path).read_bytes()).hexdigest()
             ):
-                raise RuntimeError("Blender MCP proof does not match the current run")
+                raise RuntimeError("Blender proof does not match the current run")
             return result
         finally:
             _lock.release()
@@ -232,24 +314,17 @@ class BlenderMcpAdapter:
                 "report_path": str(Path(report_path).resolve()),
                 "run_id": run_id,
             }
-            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
-            runner_directory = _b64(str((ROOT / "blender").resolve()))
-            code = (
-                "import base64, json, sys\n"
-                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
-                "from lab_mcp_runner import run_operator\n"
-                f"result = run_operator(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
-            )
-            result = self._execute(
-                code,
-                Path(report_path).with_name("blender-mcp.log"),
+            result = self._run_job(
+                "run_operator",
+                payload,
+                Path(report_path).with_name("blender-subprocess.log"),
                 model_path=model_path,
                 modules=modules,
             )
             output_path = Path(output_path)
             report_path = Path(report_path)
             if not output_path.is_file() or not report_path.is_file():
-                raise RuntimeError("Blender MCP did not create the model and operator report")
+                raise RuntimeError("Blender job did not create the model and operator report")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             expected_hash = hashlib.sha256(output_path.read_bytes()).hexdigest()
             for proof in (result, report):
@@ -259,10 +334,10 @@ class BlenderMcpAdapter:
                     or proof.get("run_id") != run_id
                     or proof.get("operator") != capability["target"]
                     or not proof.get("verified_after_reopen")
-                    or proof.get("transport") != "official-blender-mcp"
+                    or proof.get("transport") != self.transport_name
                     or proof.get("output_sha256") != expected_hash
                 ):
-                    raise RuntimeError("Blender MCP operator proof does not match the current run")
+                    raise RuntimeError("Blender operator proof does not match the current run")
             return result
         finally:
             _lock.release()
@@ -297,24 +372,17 @@ class BlenderMcpAdapter:
                 "report_path": str(Path(report_path).resolve()),
                 "run_id": run_id,
             }
-            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
-            runner_directory = _b64(str((ROOT / "blender").resolve()))
-            code = (
-                "import base64, json, sys\n"
-                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
-                "from lab_mcp_runner import run_steps\n"
-                f"result = run_steps(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
-            )
-            result = self._execute(
-                code,
-                Path(report_path).with_name("blender-mcp.log"),
+            result = self._run_job(
+                "run_steps",
+                payload,
+                Path(report_path).with_name("blender-subprocess.log"),
                 model_path=model_path,
                 modules=modules,
             )
             output_path = Path(output_path)
             report_path = Path(report_path)
             if not output_path.is_file() or not report_path.is_file():
-                raise RuntimeError("Blender MCP did not create the workflow model and report")
+                raise RuntimeError("Blender job did not create the workflow model and report")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             expected_hash = hashlib.sha256(output_path.read_bytes()).hexdigest()
             for proof in (result, report):
@@ -324,10 +392,10 @@ class BlenderMcpAdapter:
                     or proof.get("workflow_id") != workflow_id
                     or proof.get("run_id") != run_id
                     or not proof.get("verified_after_reopen")
-                    or proof.get("transport") != "official-blender-mcp"
+                    or proof.get("transport") != self.transport_name
                     or proof.get("output_sha256") != expected_hash
                 ):
-                    raise RuntimeError("Blender MCP workflow proof does not match the current run")
+                    raise RuntimeError("Blender workflow proof does not match the current run")
             return result
         finally:
             _lock.release()
@@ -347,26 +415,21 @@ class BlenderMcpAdapter:
                 "report_path": str(Path(report_path).resolve()),
                 "run_id": run_id,
             }
-            encoded_payload = _b64(json.dumps(payload, ensure_ascii=False))
-            runner_directory = _b64(str((ROOT / "blender").resolve()))
-            code = (
-                "import base64, json, sys\n"
-                f"sys.path.insert(0, base64.b64decode('{runner_directory}').decode('utf-8'))\n"
-                "from lab_mcp_runner import create_colored_primitive\n"
-                f"result = create_colored_primitive(json.loads(base64.b64decode('{encoded_payload}').decode('utf-8')))"
-            )
-            result = self._execute(
-                code, Path(report_path).with_name("blender-mcp.log"), timeout=self.timeout
+            result = self._run_job(
+                "create_colored_primitive",
+                payload,
+                Path(report_path).with_name("blender-subprocess.log"),
+                timeout=self.timeout,
             )
             if not Path(output_path).is_file() or not Path(report_path).is_file():
-                raise RuntimeError("Blender MCP did not create the primitive and proof report")
+                raise RuntimeError("Blender job did not create the primitive and proof report")
             if (
                 not result.get("ok")
                 or result.get("run_id") != run_id
                 or result.get("primitive") != primitive
                 or result.get("color_hex") != color_hex
                 or not result.get("verified_after_reopen")
-                or result.get("transport") != "official-blender-mcp"
+                or result.get("transport") != self.transport_name
                 or result.get("output_sha256")
                 != hashlib.sha256(Path(output_path).read_bytes()).hexdigest()
             ):

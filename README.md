@@ -1,12 +1,12 @@
-# Ollama3D MCP — Qwen → Excel VBA + Blender MCP
+# Ollama3D — Qwen → Excel VBA + Blender
 
 Demo: [YouTube](https://www.youtube.com/watch?v=GMYszBR3qgg)
 
-Project chạy local trên Windows, cho phép Qwen điều phối Excel VBA và Blender qua một MCP server có allowlist. Qwen chỉ nhìn thấy ba tool cấp cao:
+Project chạy local trên Windows, cho phép Qwen điều phối Excel VBA và Blender qua allowlist. MCP phía Qwen vẫn được hỗ trợ nhưng Blender mặc định chạy bằng tiến trình con ngắn hạn.
 
 - `system_status()` kiểm tra Qwen, macro VBA thật và Blender operator thật.
 - `run_excel_to_blender(excel_path, model_path, output_dir)` chạy trọn workflow và kiểm chứng file `.blend` sau khi mở lại.
-- `create_colored_primitive(primitive, color_hex, output_dir, size, object_name)` tạo cube, UV sphere hoặc cylinder có màu qua Blender MCP chính thức.
+- `create_colored_primitive(primitive, color_hex, output_dir, size, object_name)` tạo cube, UV sphere hoặc cylinder có màu qua Blender subprocess.
 
 Qwen chọn công việc; registry và Python quyết định chính xác macro/operator nào được phép chạy:
 
@@ -15,11 +15,11 @@ Qwen (Open WebUI)
   → MCP http://127.0.0.1:8090/mcp
   → capabilities.json
       ├─ Excel COM → macro VBA đã đăng ký
-      └─ Blender MCP chính thức → trusted runner → operator/bpy đã đăng ký
+      └─ Blender subprocess → fixed job entry → operator/bpy đã đăng ký
   → lưu proof, mở lại file và kiểm chứng kết quả
 ```
 
-MCP của dự án là lớp tool, quyền và workflow dành cho Qwen. Blender MCP chính thức là cầu nối thực thi bên trong Blender. Excel dùng COM làm cầu nối tới add-in VBA.
+MCP của dự án là lớp tool tùy chọn dành cho Qwen. Đường Blender mặc định không phụ thuộc extension MCP; Excel dùng COM làm cầu nối tới add-in VBA.
 
 ## Cài đặt
 
@@ -33,14 +33,14 @@ Installer thực hiện và kiểm tra từng phần:
 
 1. tạo Python 3.12 virtual environment và cài dependency đã khóa phiên bản;
 2. mở Excel thật, nạp file `excel/Ollama3DProof.xlam`, gọi macro ping;
-3. xác minh/cài Blender MCP chính thức v1.0.3, sau đó đóng gói và bật `ollama3d_proof_addon`;
+3. đóng gói và bật `ollama3d_proof_addon`; transport subprocess không cần cài Blender MCP;
 4. dùng `OLLAMA_MODELS` trong `config.json` và kiểm tra model Qwen;
 5. khởi động local API/MCP và Open WebUI;
-6. đăng ký model **Excel → Blender MCP** với ba MCP tool allowlist.
+6. đăng ký model Open WebUI với các MCP tool allowlist hiện có.
 
 Installer không bật “Trust access to the VBA project object model” và không sửa Excel Trust Center. File `.xlam` đã được build sẵn; runtime chỉ mở add-in và gọi macro công khai.
 
-Installer tự tải gói MCP v1.0.3 từ release chính thức và chỉ cài khi SHA-256 khớp. Nếu máy chủ Blender chặn tải tự động, tải `mcp-1.0.3.zip` từ [release chính thức](https://projects.blender.org/lab/blender_mcp/releases/tag/v1.0.3) vào `runtime/vendor/` rồi chạy lại `Install.cmd`.
+Chỉ khi đặt `blender_addon.transport` thành `official_mcp`, installer mới yêu cầu Blender 5.1+ và cài extension MCP tùy chọn.
 
 Các lần sau dùng:
 
@@ -69,6 +69,9 @@ Các đường dẫn cần đúng trong `config.json`:
     "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
     "addin_path": "excel/Ollama3DProof.xlam"
   },
+  "blender_addon": {
+    "transport": "subprocess"
+  },
   "capability_registry": "capabilities.json"
 }
 ```
@@ -84,7 +87,7 @@ Các đường dẫn cần đúng trong `config.json`:
 # Unit/integration contract tests
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 
-# MCP protocol gọi Excel VBA và Blender MCP thật
+# MCP protocol gọi Excel VBA và Blender thật
 .\.venv\Scripts\python.exe tests\smoke_mcp.py
 
 # Qwen chọn đúng tool, không gọi tool khi không cần, và chạy workflow thật
@@ -106,7 +109,7 @@ Chứng cứ của bài test Qwen được lưu tại `evidence/webui-mcp-smoke.
 
 Macro và Blender add-on không được đưa trực tiếp thành hàng loạt tool cho LLM. MCP chỉ công bố workflow cấp cao nên add-in/add-on trùng tên không thể khiến Qwen tự chọn nhầm operator hoặc macro.
 
-Blender MCP chính thức chỉ bind vào `127.0.0.1` trên một cổng động và Blender được đóng sau mỗi lần gọi. Qwen không nhìn thấy tool chạy Python tự do; adapter chỉ gửi runner cố định cùng dữ liệu JSON đã mã hóa, nên không thể biến tham số tool thành mã Python.
+Mỗi tác vụ mở một Blender background process, đọc `job.json` qua entry point cố định và đóng sau khi ghi `result.json`. Dispatch chỉ chứa các operation đã định trước; tham số không được biến thành mã Python.
 
 ## Capability registry
 
@@ -140,7 +143,7 @@ Registry không tự động cho phép mọi macro hoặc `bpy.ops`. Thiết k�
 ## Bảo mật và phạm vi local
 
 - API/MCP, Ollama và Open WebUI chỉ dùng địa chỉ local.
-- Blender MCP bind `127.0.0.1` trên cổng động và Blender được đóng sau mỗi tác vụ.
-- Tham số được kiểm tra trước khi mã hóa thành JSON cho trusted runner.
+- Blender background process được đóng sau mỗi tác vụ; không mở cổng mạng ở transport mặc định.
+- Tham số được kiểm tra trước khi ghi JSON cho trusted runner.
 - Workbook/model phải nằm trong project hoặc `paths.allowed_roots`.
-- Internet chỉ cần khi tải dependency, model hoặc gói Blender MCP trong bước cài đặt.
+- Internet chỉ cần khi tải dependency hoặc model; extension Blender MCP chỉ cần cho transport tùy chọn.

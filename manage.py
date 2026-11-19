@@ -5,6 +5,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -309,35 +310,6 @@ def ensure_integrations(config):
 
     excel = ExcelVbaAdapter().status()
     say(f"Excel VBA ready: {excel['addin_version']} (macro callable)")
-    bridge = config["official_blender_mcp"]
-    bridge_package = resolve(config, bridge["package"])
-    if not bridge_package.is_file():
-        say(f"Downloading official Blender MCP {bridge['version']}...")
-        bridge_package.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            response = httpx.get(
-                bridge["download_url"],
-                follow_redirects=True,
-                timeout=60,
-                headers={"User-Agent": "Mozilla/5.0 Ollama3D-Installer/1.0"},
-            )
-            response.raise_for_status()
-            downloaded = response.content
-            if hashlib.sha256(downloaded).hexdigest() != bridge["sha256"]:
-                raise RuntimeError("downloaded package SHA-256 does not match")
-            temporary = bridge_package.with_suffix(".download")
-            temporary.write_bytes(downloaded)
-            temporary.replace(bridge_package)
-        except Exception as exc:
-            raise RuntimeError(
-                "Could not download official Blender MCP. Download it from "
-                f"{bridge['download_url']} and save it as {bridge_package}. Error: {exc}"
-            ) from exc
-    actual_hash = hashlib.sha256(bridge_package.read_bytes()).hexdigest()
-    if actual_hash != bridge["sha256"]:
-        raise RuntimeError(
-            f"Official Blender MCP {bridge['version']} package has an unexpected SHA-256"
-        )
     settings = config["blender_addon"]
     package = resolve(config, settings["package"])
     source = ROOT / "blender" / settings["module"]
@@ -365,29 +337,55 @@ def ensure_integrations(config):
         creationflags=FLAGS,
         timeout=settings["timeout_seconds"],
     )
-    # Install/reinstall last with -e. The legacy add-on installer saves Blender
-    # preferences, so this ordering guarantees the extension remains enabled.
-    subprocess.run(
-        [
-            str(data_path(config, "blender_exe")),
-            "--command",
-            "extension",
-            "install-file",
-            "-r",
-            "user_default",
-            "-e",
-            str(bridge_package),
-        ],
-        creationflags=FLAGS,
-        timeout=120,
-        check=True,
-    )
-    say(f"Official Blender MCP ready: {bridge['version']} (localhost only)")
+    if settings.get("transport", "subprocess") == "official_mcp":
+        version_output = subprocess.run(
+            [str(data_path(config, "blender_exe")), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout
+        match = re.search(r"Blender (\d+)\.(\d+)", version_output)
+        if not match or tuple(map(int, match.groups())) < (5, 1):
+            raise RuntimeError("official_mcp transport requires Blender 5.1 or newer")
+        bridge = config["official_blender_mcp"]
+        bridge_package = resolve(config, bridge["package"])
+        if not bridge_package.is_file():
+            say(f"Downloading optional official Blender MCP {bridge['version']}...")
+            bridge_package.parent.mkdir(parents=True, exist_ok=True)
+            response = httpx.get(
+                bridge["download_url"], follow_redirects=True, timeout=60
+            )
+            response.raise_for_status()
+            downloaded = response.content
+            if hashlib.sha256(downloaded).hexdigest() != bridge["sha256"]:
+                raise RuntimeError("Official Blender MCP download SHA-256 does not match")
+            bridge_package.write_bytes(downloaded)
+        if hashlib.sha256(bridge_package.read_bytes()).hexdigest() != bridge["sha256"]:
+            raise RuntimeError("Official Blender MCP package SHA-256 does not match")
+        subprocess.run(
+            [
+                str(data_path(config, "blender_exe")),
+                "--command",
+                "extension",
+                "install-file",
+                "-r",
+                "user_default",
+                "-e",
+                str(bridge_package),
+            ],
+            creationflags=FLAGS,
+            timeout=120,
+            check=True,
+        )
+        say(f"Optional official Blender MCP ready: {bridge['version']}")
+    else:
+        say("Blender subprocess transport ready; no Blender MCP extension required.")
     probe_directory = ROOT / "runtime/probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
     blender = BlenderMcpAdapter().status(probe_directory)
     say(
-        f"Blender add-on ready through official MCP "
+        f"Blender add-on ready through {blender['transport']} "
         f"(operator callable: {blender['operator']})"
     )
 
@@ -457,7 +455,7 @@ def sync_webui(config):
         "info": {
             "id": server_id,
             "name": "Ollama3D MCP",
-            "description": "Real Excel VBA and allowlisted Blender add-on workflow over official Blender MCP.",
+            "description": "Real Excel VBA and allowlisted Blender add-on workflows.",
         },
     }
     connections = [
@@ -472,7 +470,7 @@ def sync_webui(config):
         "name": "Excel → Blender MCP",
         "meta": {
             "toolIds": ["server:mcp:" + server_id],
-            "description": "Qwen with registry-controlled local MCP tools backed by real VBA and official Blender MCP.",
+            "description": "Qwen with registry-controlled local tools backed by real VBA and Blender subprocess jobs.",
             "capabilities": {
                 key: False
                 for key in (
@@ -530,7 +528,8 @@ def check(config):
         "Excel VBA add-in": resolve(config, config["excel_vba"]["addin_path"]),
         "Capability registry": resolve(config, config["capability_registry"]),
         "Blender add-on source": ROOT / "blender" / config["blender_addon"]["module"] / "__init__.py",
-        "Blender MCP trusted runner": ROOT / "blender/lab_mcp_runner.py",
+        "Blender trusted runner": ROOT / "blender/lab_mcp_runner.py",
+        "Blender subprocess entry": ROOT / "blender/job_entry.py",
     }
     for label, path in required.items():
         if not path.exists():

@@ -59,7 +59,7 @@ def system_status():
         status["qwen"].get("available")
         and status["excel"].get("macro_callable")
         and status["blender"].get("operator_callable")
-        and status["blender"].get("official_mcp_callable")
+        and status["blender"].get("transport_callable")
     )
     status["ok"] = status["ready"]
     log("mcp_system_status", {"result": status})

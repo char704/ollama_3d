@@ -1,5 +1,7 @@
 import os
+import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from copy import deepcopy
@@ -172,6 +174,57 @@ class BlenderDiscoveryTests(unittest.TestCase):
         self.assertEqual(all_types["count"]["type"], "INT")
         self.assertEqual(all_types["mode"]["type"], "ENUM")
         self.assertEqual(all_types["filepath"]["subtype"], "FILE_PATH")
+        self.assertTrue(report["blender_version"])
+        self.assertEqual(report["transport"], "blender-subprocess")
+
+    def test_multiple_user_addons_load_with_and_without_factory_startup(self):
+        fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
+        proof = ROOT / "blender" / "ollama3d_proof_addon"
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            folder = Path(folder)
+            scripts = folder / "scripts"
+            addons = scripts / "addons"
+            addons.mkdir(parents=True)
+            shutil.copytree(fixture, addons / fixture.name)
+            shutil.copytree(proof, addons / proof.name)
+            adapter = BlenderMcpAdapter()
+            environment = {**os.environ, "BLENDER_USER_SCRIPTS": str(scripts)}
+            for factory_startup in (False, True):
+                label = "factory" if factory_startup else "preferences"
+                report_path = folder / f"{label}-report.json"
+                result_path = folder / f"{label}-result.json"
+                job_path = folder / f"{label}-job.json"
+                job_path.write_text(
+                    json.dumps(
+                        {
+                            "operation": "discover",
+                            "payload": {
+                                "modules": [fixture.name, proof.name],
+                                "report_path": str(report_path),
+                                "run_id": label,
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                subprocess.run(
+                    adapter._subprocess_command(
+                        job_path,
+                        result_path,
+                        modules=[fixture.name, proof.name],
+                        factory_startup=factory_startup,
+                    ),
+                    check=True,
+                    timeout=60,
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                )
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                self.assertTrue(result["ok"])
+                ids = set(result["result"]["operator_ids"])
+                self.assertIn("ollama3d_fixture.all_types", ids)
+                self.assertIn("ollama3d_proof.apply_vbom", ids)
 
 
 if __name__ == "__main__":

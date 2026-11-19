@@ -1,5 +1,7 @@
 import os
+import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,7 +58,7 @@ class OperatorWorkflowTests(unittest.TestCase):
                     "diff": {},
                     "output_sha256": "adapter-verified",
                     "verified_after_reopen": True,
-                    "transport": "official-blender-mcp",
+                    "transport": "blender-subprocess",
                 }
 
             run_operator.side_effect = result
@@ -96,21 +98,25 @@ class OperatorWorkflowTests(unittest.TestCase):
 class BlenderOperatorRegressionTests(unittest.TestCase):
     @staticmethod
     def _inspect(adapter, model_path, directory, label):
-        code = (
-            "import bpy\n"
-            "result = {name: {"
-            "'material': bpy.data.objects[name].active_material.name, "
-            "'color_hex': bpy.data.objects[name].get('bom_color_hex'), "
-            "'diffuse_color': [round(value, 6) for value in "
-            "bpy.data.objects[name].active_material.diffuse_color]} "
-            "for name in ('Upper', 'Sole', 'Laces')}"
-        )
-        return adapter._execute(
-            code,
-            directory / f"inspect-{label}.log",
-            model_path=model_path,
+        result_path = directory / f"inspect-{label}.json"
+        subprocess.run(
+            [
+                str(BLENDER),
+                "--background",
+                str(model_path),
+                "--python-exit-code",
+                "1",
+                "--python",
+                str(ROOT / "tests" / "fixtures" / "inspect_blend.py"),
+                "--",
+                str(result_path),
+            ],
+            check=True,
             timeout=60,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
         )
+        return json.loads(result_path.read_text(encoding="utf-8"))
 
     def test_generic_apply_vbom_matches_legacy_path_after_reopen(self):
         capability = REGISTRY.require(
@@ -144,6 +150,8 @@ class BlenderOperatorRegressionTests(unittest.TestCase):
             legacy_scene = self._inspect(adapter, legacy_output, folder, "legacy")
 
         self.assertTrue(generic["verified_after_reopen"])
+        self.assertTrue(generic["blender_version"])
+        self.assertEqual(generic["transport"], "blender-subprocess")
         self.assertEqual(generic_scene, legacy_scene)
         self.assertEqual(
             {value["color_hex"] for value in generic_scene.values()},

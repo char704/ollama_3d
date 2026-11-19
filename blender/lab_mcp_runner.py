@@ -6,6 +6,28 @@ import json
 import bpy
 
 
+def _report_context(payload):
+    return {
+        "blender_version": bpy.app.version_string,
+        "transport": payload.get("transport", "blender-subprocess"),
+    }
+
+
+def status(payload):
+    operator_name = payload["operator"]
+    try:
+        category, name = operator_name.split(".", 1)
+        callable_operator = hasattr(getattr(bpy.ops, category), name)
+    except (AttributeError, ValueError):
+        callable_operator = False
+    return {
+        "ok": True,
+        "operator": operator_name,
+        "operator_callable": callable_operator,
+        **_report_context(payload),
+    }
+
+
 def _operator_subclasses():
     seen = set()
     pending = list(bpy.types.Operator.__subclasses__())
@@ -101,6 +123,7 @@ def discover(payload):
         "operator_count": len(operators),
         "operator_ids": [item["bl_idname"] for item in operators],
         "operators": operators,
+        **_report_context(payload),
     }
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
@@ -243,7 +266,7 @@ def run_operator(payload):
         "diff": difference,
         "output_sha256": output_hash,
         "verified_after_reopen": True,
-        "transport": "official-blender-mcp",
+        **_report_context(payload),
     }
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
@@ -316,7 +339,7 @@ def run_steps(payload):
         "steps": step_reports,
         "output_sha256": output_hash,
         "verified_after_reopen": True,
-        "transport": "official-blender-mcp",
+        **_report_context(payload),
     }
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
@@ -377,7 +400,7 @@ def create_colored_primitive(payload):
         "output_path": payload["output_path"],
         "output_sha256": output_hash,
         "verified_after_reopen": True,
-        "transport": "official-blender-mcp",
+        **_report_context(payload),
     }
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
@@ -415,7 +438,7 @@ def apply_vbom(payload):
             "output_path": payload["output_path"],
             "output_sha256": output_hash,
             "verified_after_reopen": True,
-            "transport": "official-blender-mcp",
+            **_report_context(payload),
         }
     )
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
