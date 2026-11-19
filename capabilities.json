@@ -52,7 +52,7 @@
       "provider": "blender_builtin",
       "handler": "create_colored_primitive",
       "public_tool": "create_colored_primitive",
-      "target": "lab_mcp_runner.create_colored_primitive",
+      "target": "blender_runner.create_colored_primitive",
       "settings": {
         "primitives": [
           "cube",

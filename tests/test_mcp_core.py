@@ -164,7 +164,7 @@ class McpRegistrationTests(unittest.TestCase):
 
 class WorkflowTests(unittest.TestCase):
     @patch.object(mcp_workflow, "log")
-    @patch.object(mcp_workflow.BlenderMcpAdapter, "create_colored_primitive")
+    @patch.object(mcp_workflow.BlenderAdapter, "create_colored_primitive")
     def test_colored_primitive_is_validated_and_verified(self, create, _log):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             output = Path(folder)
@@ -198,7 +198,7 @@ class WorkflowTests(unittest.TestCase):
                 mcp_workflow.create_colored_primitive("cube", "purple", output)
 
     @patch.object(mcp_workflow, "log")
-    @patch.object(mcp_workflow.BlenderMcpAdapter, "apply")
+    @patch.object(mcp_workflow.BlenderAdapter, "apply")
     @patch.object(mcp_workflow.ExcelVbaAdapter, "export")
     @patch.object(mcp_workflow, "scoped_path")
     def test_real_workflow_contract_is_fixed_and_verified(
@@ -250,7 +250,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn('"blender_transport": "blender-subprocess"', verification)
 
     @patch.object(mcp_workflow, "log")
-    @patch.object(mcp_workflow.BlenderMcpAdapter, "status")
+    @patch.object(mcp_workflow.BlenderAdapter, "status")
     @patch.object(mcp_workflow.ExcelVbaAdapter, "status")
     @patch.object(mcp_workflow.httpx, "get")
     def test_status_requires_all_three_real_components(

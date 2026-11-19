@@ -2,7 +2,7 @@
 
 Demo: [YouTube](https://www.youtube.com/watch?v=GMYszBR3qgg)
 
-Project chạy local trên Windows, cho phép Qwen điều phối Excel VBA và Blender qua allowlist. MCP phía Qwen vẫn được hỗ trợ nhưng Blender mặc định chạy bằng tiến trình con ngắn hạn.
+Project chạy local trên Windows, cho phép Qwen điều phối Excel VBA và Blender qua allowlist. MCP phía Qwen/Open WebUI vẫn được hỗ trợ; phía Blender chỉ dùng tiến trình con ngắn hạn, không cài hoặc mở Blender MCP.
 
 Đường điều phối mặc định là agent CLI nhỏ, không phụ thuộc MCP:
 
@@ -36,7 +36,7 @@ Qwen (Open WebUI)
   → lưu proof, mở lại file và kiểm chứng kết quả
 ```
 
-MCP của dự án là lớp tool tùy chọn dành cho Qwen. Đường Blender mặc định không phụ thuộc extension MCP; Excel dùng COM làm cầu nối tới add-in VBA.
+MCP của dự án chỉ là lớp tool giữa Open WebUI và workflow Python. Nó không nằm giữa workflow và Blender. Blender luôn chạy subprocess gọi add-on; Excel dùng COM gọi add-in VBA.
 
 ## Cài đặt
 
@@ -50,14 +50,12 @@ Installer thực hiện và kiểm tra từng phần:
 
 1. tạo Python 3.12 virtual environment và cài dependency đã khóa phiên bản;
 2. mở Excel thật, nạp file `excel/Ollama3DProof.xlam`, gọi macro ping;
-3. đóng gói và bật `ollama3d_proof_addon`; transport subprocess không cần cài Blender MCP;
+3. đóng gói và bật `ollama3d_proof_addon`; Blender chỉ dùng subprocess;
 4. dùng `OLLAMA_MODELS` trong `config.json` và kiểm tra model Qwen;
 5. khởi động local API/MCP và Open WebUI;
 6. đăng ký model Open WebUI với các MCP tool allowlist hiện có.
 
 Installer không bật “Trust access to the VBA project object model” và không sửa Excel Trust Center. File `.xlam` đã được build sẵn; runtime chỉ mở add-in và gọi macro công khai.
-
-Chỉ khi đặt `blender_addon.transport` thành `official_mcp`, installer mới yêu cầu Blender 5.1+ và cài extension MCP tùy chọn.
 
 Các lần sau dùng:
 
@@ -65,7 +63,7 @@ Các lần sau dùng:
 .\Open-WebUI.cmd
 ```
 
-Mở <http://127.0.0.1:8080>, chọn **Excel → Blender MCP**.
+Mở <http://127.0.0.1:8080>, chọn **Ollama3D Excel → Blender**.
 
 ## Cấu hình máy
 
@@ -177,4 +175,4 @@ Registry không tự động cho phép mọi macro hoặc `bpy.ops`. Thiết k�
 - Blender background process được đóng sau mỗi tác vụ; không mở cổng mạng ở transport mặc định.
 - Tham số được kiểm tra trước khi ghi JSON cho trusted runner.
 - Workbook/model phải nằm trong project hoặc `paths.allowed_roots`.
-- Internet chỉ cần khi tải dependency hoặc model; extension Blender MCP chỉ cần cho transport tùy chọn.
+- Internet chỉ cần khi tải dependency hoặc model; Blender không cần extension MCP.

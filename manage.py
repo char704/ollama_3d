@@ -105,7 +105,7 @@ def fingerprint(service):
                 ROOT / "mcp_server.py",
                 *sorted((ROOT / "adapters").glob("*.py")),
                 *sorted((ROOT / "workflows").glob("*.py")),
-                ROOT / "blender/lab_mcp_runner.py",
+                ROOT / "blender/blender_runner.py",
                 *sorted((ROOT / "blender" / "ollama3d_proof_addon").glob("*.py")),
             ]
         )
@@ -305,7 +305,7 @@ def ensure_ollama(config, pull=False):
 
 
 def ensure_integrations(config):
-    from adapters.blender_mcp import BlenderMcpAdapter
+    from adapters.blender import BlenderAdapter
     from adapters.excel_vba import ExcelVbaAdapter
 
     excel = ExcelVbaAdapter().status()
@@ -337,53 +337,10 @@ def ensure_integrations(config):
         creationflags=FLAGS,
         timeout=settings["timeout_seconds"],
     )
-    if settings.get("transport", "subprocess") == "official_mcp":
-        version_output = subprocess.run(
-            [str(data_path(config, "blender_exe")), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        ).stdout
-        match = re.search(r"Blender (\d+)\.(\d+)", version_output)
-        if not match or tuple(map(int, match.groups())) < (5, 1):
-            raise RuntimeError("official_mcp transport requires Blender 5.1 or newer")
-        bridge = config["official_blender_mcp"]
-        bridge_package = resolve(config, bridge["package"])
-        if not bridge_package.is_file():
-            say(f"Downloading optional official Blender MCP {bridge['version']}...")
-            bridge_package.parent.mkdir(parents=True, exist_ok=True)
-            response = httpx.get(
-                bridge["download_url"], follow_redirects=True, timeout=60
-            )
-            response.raise_for_status()
-            downloaded = response.content
-            if hashlib.sha256(downloaded).hexdigest() != bridge["sha256"]:
-                raise RuntimeError("Official Blender MCP download SHA-256 does not match")
-            bridge_package.write_bytes(downloaded)
-        if hashlib.sha256(bridge_package.read_bytes()).hexdigest() != bridge["sha256"]:
-            raise RuntimeError("Official Blender MCP package SHA-256 does not match")
-        subprocess.run(
-            [
-                str(data_path(config, "blender_exe")),
-                "--command",
-                "extension",
-                "install-file",
-                "-r",
-                "user_default",
-                "-e",
-                str(bridge_package),
-            ],
-            creationflags=FLAGS,
-            timeout=120,
-            check=True,
-        )
-        say(f"Optional official Blender MCP ready: {bridge['version']}")
-    else:
-        say("Blender subprocess transport ready; no Blender MCP extension required.")
+    say("Blender subprocess transport ready; no Blender-side MCP extension required.")
     probe_directory = ROOT / "runtime/probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
-    blender = BlenderMcpAdapter().status(probe_directory)
+    blender = BlenderAdapter().status(probe_directory)
     say(
         f"Blender add-on ready through {blender['transport']} "
         f"(operator callable: {blender['operator']})"
@@ -467,7 +424,7 @@ def sync_webui(config):
     body = {
         "id": MODEL_ID,
         "base_model_id": config["ollama"]["model"],
-        "name": "Excel → Blender MCP",
+        "name": "Ollama3D Excel → Blender",
         "meta": {
             "toolIds": ["server:mcp:" + server_id],
             "description": "Qwen with registry-controlled local tools backed by real VBA and Blender subprocess jobs.",
@@ -528,7 +485,7 @@ def check(config):
         "Excel VBA add-in": resolve(config, config["excel_vba"]["addin_path"]),
         "Capability registry": resolve(config, config["capability_registry"]),
         "Blender add-on source": ROOT / "blender" / config["blender_addon"]["module"] / "__init__.py",
-        "Blender trusted runner": ROOT / "blender/lab_mcp_runner.py",
+        "Blender trusted runner": ROOT / "blender/blender_runner.py",
         "Blender subprocess entry": ROOT / "blender/job_entry.py",
     }
     for label, path in required.items():
@@ -549,7 +506,7 @@ def check(config):
 
 
 def discover_addons(config, requested_modules, write_proposals=False):
-    from adapters.blender_mcp import BlenderMcpAdapter
+    from adapters.blender import BlenderAdapter
     from capability_discovery import propose_entries
     from capability_registry import load_registry
 
@@ -560,7 +517,7 @@ def discover_addons(config, requested_modules, write_proposals=False):
         modules.append(configured_module)
     modules = list(dict.fromkeys(modules))
     directory = ROOT / "runtime" / "discovered"
-    report = BlenderMcpAdapter().discover(modules, directory)
+    report = BlenderAdapter().discover(modules, directory)
     for module in modules:
         module_report = {
             **report,
@@ -600,7 +557,7 @@ def _write_addon_json(path, document):
 
 
 def addon_add(config, module, root=ROOT):
-    from adapters.blender_mcp import BlenderMcpAdapter
+    from adapters.blender import BlenderAdapter
     from capability_discovery import propose_entries
     from capability_registry import load_registry
 
@@ -610,7 +567,7 @@ def addon_add(config, module, root=ROOT):
     if pack_directory.exists():
         raise FileExistsError(f"Add-on pack already exists: {pack_directory}")
     discovery_directory = Path(root) / "runtime" / "discovered" / module
-    report = BlenderMcpAdapter().discover([module], discovery_directory)
+    report = BlenderAdapter().discover([module], discovery_directory)
     registry = load_registry(
         resolve(config, config["capability_registry"]),
         addon_root=Path(root) / "addons",
@@ -770,7 +727,7 @@ def main():
     ensure_service(config, "api")
     ensure_service(config, "webui")
     sync_webui(config)
-    say(f"READY: {service_url(config, 'webui')} - choose Excel → Blender MCP")
+    say(f"READY: {service_url(config, 'webui')} - choose Ollama3D Excel → Blender")
     if not args.no_browser:
         webbrowser.open(service_url(config, "webui"))
     return 0

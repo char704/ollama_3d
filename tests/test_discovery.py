@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from adapters.blender_mcp import BlenderMcpAdapter
+from adapters.blender import BlenderAdapter
 from adapters.common import BLENDER
 from capability_discovery import propose_entries, to_schema, validate_params
 from capability_registry import CapabilityRegistry
@@ -148,7 +148,7 @@ class BlenderDiscoveryTests(unittest.TestCase):
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
             with patch.dict(os.environ, {"BLENDER_USER_SCRIPTS": str(scripts)}):
-                report = BlenderMcpAdapter().discover(
+                report = BlenderAdapter().discover(
                     ["ollama3d_fixture_addon"], folder / "report"
                 )
         operators = {item["bl_idname"]: item for item in report["operators"]}
@@ -187,7 +187,7 @@ class BlenderDiscoveryTests(unittest.TestCase):
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
             shutil.copytree(proof, addons / proof.name)
-            adapter = BlenderMcpAdapter()
+            adapter = BlenderAdapter()
             environment = {**os.environ, "BLENDER_USER_SCRIPTS": str(scripts)}
             for factory_startup in (False, True):
                 label = "factory" if factory_startup else "preferences"

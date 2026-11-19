@@ -1,4 +1,4 @@
-"""Trusted Blender-side operation invoked by the official MCP extension."""
+"""Trusted Blender-side operations invoked by the fixed subprocess entry point."""
 
 import hashlib
 import json

@@ -98,7 +98,7 @@ def create_colored_primitive(
     size: float = 2.0,
     object_name: str = "QwenPrimitive",
 ) -> dict[str, Any]:
-    """Create one colored Blender primitive through official Blender MCP, save it, reopen it, and verify it. Use only for an explicit request with an absolute output directory. color_hex must be #RRGGBB."""
+    """Create one colored Blender primitive through the subprocess adapter, save it, reopen it, and verify it. Use only for an explicit request with an absolute output directory. color_hex must be #RRGGBB."""
     arguments = {
         "primitive": primitive,
         "color_hex": color_hex,

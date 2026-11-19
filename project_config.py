@@ -74,23 +74,6 @@ def load(path=None):
         raise ValueError("config.json: blender_addon.module is invalid")
     if type(addon.get("timeout_seconds")) is not int or not 30 <= addon["timeout_seconds"] <= 600:
         raise ValueError("config.json: blender_addon.timeout_seconds is invalid")
-    if addon.get("transport", "subprocess") not in ("subprocess", "official_mcp"):
-        raise ValueError("config.json: blender_addon.transport is invalid")
-
-    bridge = config.get("official_blender_mcp", {})
-    if addon.get("transport", "subprocess") == "official_mcp":
-        if bridge.get("host") != "127.0.0.1":
-            raise ValueError("config.json: official_blender_mcp.host must be 127.0.0.1")
-        if not re.fullmatch(r"\d+\.\d+\.\d+", bridge.get("version", "")):
-            raise ValueError("config.json: official_blender_mcp.version is invalid")
-        if not isinstance(bridge.get("package"), str) or not bridge["package"].strip():
-            raise ValueError("config.json: official_blender_mcp.package is required")
-        download = urlparse(bridge.get("download_url", ""))
-        if download.scheme != "https" or download.hostname != "projects.blender.org":
-            raise ValueError("config.json: official_blender_mcp.download_url is invalid")
-        if not re.fullmatch(r"[0-9a-f]{64}", bridge.get("sha256", "")):
-            raise ValueError("config.json: official_blender_mcp.sha256 is invalid")
-
     paths = config.get("paths", {})
     for key in ("inputs", "outputs", "default_model", "blender_exe"):
         if not isinstance(paths.get(key), str) or not paths[key].strip():

@@ -6,7 +6,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from adapters.blender_mcp import BlenderMcpAdapter
+from adapters.blender import BlenderAdapter
 from adapters.common import CONFIG, REGISTRY, ROOT, log, write_json
 from capability_discovery import validate_params
 from project_config import data_path, scoped_path
@@ -59,7 +59,7 @@ def run_blender_workflow(workflow_id, inputs):
     try:
         output_path = run_directory / "result.blend"
         report_path = run_directory / "blender-workflow-proof.json"
-        result = BlenderMcpAdapter().run_workflow(
+        result = BlenderAdapter().run_workflow(
             workflow_id,
             resolved_steps,
             definition.get("postconditions", []),
