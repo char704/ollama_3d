@@ -13,6 +13,7 @@ from workflows.mcp_workflow import create_colored_primitive as execute_primitive
 from workflows.mcp_workflow import system_status as read_system_status
 from workflows.operator_workflow import run_blender_operator as execute_operator
 from workflows.blender_workflow import run_blender_workflow as execute_blender_workflow
+from workflows.folder_workflow import process_folder as execute_folder
 
 AUDIT_LOG = Path(__file__).resolve().parent / "logs" / "mcp-tool-calls.jsonl"
 PUBLIC_TOOLS = REGISTRY.public_tools()
@@ -51,11 +52,13 @@ mcp = MCPServer(
     instructions=(
         "Use system_status only for readiness or version questions. "
         "Use run_excel_to_blender only when the user explicitly requests processing and provides "
-        "an absolute .xlsx path, an absolute .blend path, and an absolute output directory. "
+        "an .xlsx path, a .blend path, and an output directory. Paths may be project-relative. "
+        "Use process_folder when the user gives only an input folder and output folder; it will "
+        "inspect supported files and refuse ambiguous selections. "
         "Use create_colored_primitive only when the user explicitly asks to create a cube, "
-        "UV sphere, or cylinder and provides an absolute output directory. "
+        "UV sphere, or cylinder and provides an output directory. "
         "Use list_blender_capabilities to inspect allowlisted add-on operations. "
-        "Use run_blender_operator only with a listed capability id, valid parameters, and absolute paths. "
+        "Use run_blender_operator only with a listed capability id, valid parameters, and scoped paths. "
         "Never invent paths and never report success unless status is completed."
     ),
 )
@@ -79,7 +82,7 @@ def system_status() -> dict[str, Any]:
 def run_excel_to_blender(
     excel_path: str, model_path: str, output_dir: str
 ) -> dict[str, Any]:
-    """Run the real Excel VBA to VBOM to Blender add-on workflow. Use only for an explicit processing request with all three absolute paths. Do not use for explanations or status questions."""
+    """Run the real Excel VBA to VBOM to Blender add-on workflow. Paths may be project-relative. Use only for an explicit processing request with all three paths."""
     arguments = {
         "excel_path": excel_path,
         "model_path": model_path,
@@ -91,6 +94,17 @@ def run_excel_to_blender(
 
 
 @_public_tool
+def process_folder(
+    input_dir: str = "inputs", output_dir: str = "outputs"
+) -> dict[str, Any]:
+    """Inspect a project-relative input folder and run its single unambiguous supported workflow. Use when the user supplies folders instead of individual file paths. Never choose among duplicate candidate files."""
+    arguments = {"input_dir": input_dir, "output_dir": output_dir}
+    result = execute_folder(**arguments)
+    _audit("process_folder", arguments, result)
+    return result
+
+
+@_public_tool
 def create_colored_primitive(
     primitive: Literal["cube", "uv_sphere", "cylinder"],
     color_hex: str,
@@ -98,7 +112,7 @@ def create_colored_primitive(
     size: float = 2.0,
     object_name: str = "QwenPrimitive",
 ) -> dict[str, Any]:
-    """Create one colored Blender primitive through the subprocess adapter, save it, reopen it, and verify it. Use only for an explicit request with an absolute output directory. color_hex must be #RRGGBB."""
+    """Create one colored Blender primitive through the subprocess adapter, save it, reopen it, and verify it. output_dir may be project-relative. color_hex must be #RRGGBB."""
     arguments = {
         "primitive": primitive,
         "color_hex": color_hex,
@@ -164,7 +178,7 @@ def run_blender_operator(
     model_path: str,
     output_dir: str,
 ) -> dict[str, Any]:
-    """Run one listed Blender capability. Use only for an explicit request with valid params and absolute model_path and output_dir. Never invent paths or capability ids."""
+    """Run one listed Blender capability. Project-relative model_path and output_dir are allowed. Never invent paths or capability ids."""
     arguments = {
         "capability_id": capability_id,
         "params": params,

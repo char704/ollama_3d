@@ -95,6 +95,28 @@ class AgentTests(unittest.TestCase):
         operator.assert_not_called()
         workflow.assert_not_called()
 
+    def test_relative_folder_request_calls_folder_workflow(self):
+        client = FakeClient(
+            {"intent": "run_workflow"},
+            {
+                "candidate_id": "workflow.process_folder",
+                "inputs": {"input_dir": "inputs", "output_dir": "outputs"},
+            },
+        )
+        completed = {
+            "ok": True,
+            "status": "completed",
+            "output_path": "outputs/result.blend",
+        }
+        with patch.object(
+            agent_run, "process_folder", return_value=completed
+        ) as execute:
+            result = agent_run.Agent(client).handle(
+                "Xử lý folder inputs và xuất vào outputs"
+            )
+        self.assertEqual(result["status"], "completed")
+        execute.assert_called_once_with("inputs", "outputs")
+
     def test_small_model_cannot_route_or_select_blender_work(self):
         self.assertEqual(
             agent_run.CONFIG["ollama"]["router_model"],

@@ -44,7 +44,21 @@
         "excel.export_vbom",
         "blender.apply_vbom"
       ],
-      "instructions": "Dùng run_excel_to_blender chỉ cho yêu cầu xử lý rõ ràng có đủ excel_path, model_path và output_dir tuyệt đối.",
+      "instructions": "Dùng run_excel_to_blender chỉ cho yêu cầu xử lý rõ ràng có đủ excel_path, model_path và output_dir; chấp nhận đường dẫn tương đối trong project.",
+      "enabled": true
+    },
+    {
+      "id": "workflow.process_folder",
+      "provider": "workflow",
+      "handler": "process_folder",
+      "public_tool": "process_folder",
+      "target": "workflow.process_folder",
+      "dependencies": [
+        "excel.export_vbom",
+        "blender.apply_vbom"
+      ],
+      "description": "Inspect a project-relative input folder and run the one unambiguous supported Excel/Blender workflow.",
+      "instructions": "Dùng process_folder khi người dùng chỉ cung cấp thư mục input/output tương đối. Không tự chọn nếu có nhiều file cùng loại hoặc nhiều workflow phù hợp.",
       "enabled": true
     },
     {
@@ -62,7 +76,7 @@
         "minimum_size": 0.01,
         "maximum_size": 100
       },
-      "instructions": "Dùng create_colored_primitive khi người dùng yêu cầu cube, UV sphere hoặc cylinder có màu và đã cung cấp output_dir tuyệt đối.",
+      "instructions": "Dùng create_colored_primitive khi người dùng yêu cầu cube, UV sphere hoặc cylinder có màu và đã cung cấp output_dir trong project.",
       "enabled": true
     },
     {
@@ -82,7 +96,7 @@
       "public_tool": "run_blender_operator",
       "target": "workflow.run_blender_operator",
       "description": "Run one enabled allowlisted Blender operator through the generic verified workflow.",
-      "instructions": "Chỉ dùng run_blender_operator sau khi có capability_id hợp lệ, params đúng schema, model_path .blend và output_dir tuyệt đối; nếu thiếu phải hỏi lại.",
+      "instructions": "Chỉ dùng run_blender_operator sau khi có capability_id hợp lệ, params đúng schema, model_path .blend và output_dir trong project; nếu thiếu phải hỏi lại.",
       "enabled": true
     },
     {

@@ -13,6 +13,7 @@ from capability_discovery import validate_params
 from project_config import service_url
 from workflows.blender_workflow import run_blender_workflow
 from workflows.mcp_workflow import system_status
+from workflows.folder_workflow import process_folder
 from workflows.operator_workflow import run_blender_operator
 
 ROUTER_SCHEMA = {
@@ -72,6 +73,30 @@ def retrieve_candidates(message, intent, limit=5):
                 }
             )
     elif intent == "run_workflow":
+        candidates.append(
+            {
+                "kind": "folder_workflow",
+                "id": "workflow.process_folder",
+                "description": (
+                    "Inspect a project-relative input folder and run the one unambiguous "
+                    "supported Excel or Blender workflow, writing to an output folder."
+                ),
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "input_dir": {"type": "string"},
+                        "output_dir": {"type": "string"},
+                    },
+                    "required": ["input_dir", "output_dir"],
+                    "additionalProperties": False,
+                },
+                "docs": "",
+                "score": len(
+                    query_words
+                    & _words("folder input output thư mục xử lý files process")
+                ),
+            }
+        )
         for item in REGISTRY.workflows():
             text = " ".join((item["id"], item.get("description", "")))
             candidates.append(
@@ -301,7 +326,10 @@ class Agent:
             missing = [name for name in candidate["schema"]["required"] if not inputs.get(name)]
             if missing:
                 return self._needs_input(intent, candidate_id, missing, candidates, calls)
-            result = run_blender_workflow(candidate_id, inputs)
+            if candidate["kind"] == "folder_workflow":
+                result = process_folder(inputs["input_dir"], inputs["output_dir"])
+            else:
+                result = run_blender_workflow(candidate_id, inputs)
         completed = result.get("status") == "completed"
         output_path = result.get("output_path")
         message_text = (

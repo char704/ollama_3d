@@ -65,6 +65,22 @@ Các lần sau dùng:
 
 Mở <http://127.0.0.1:8080>, chọn **Ollama3D Excel → Blender**.
 
+Bạn có thể dùng đường dẫn tương đối. Ví dụ:
+
+```text
+Xử lý folder inputs và xuất kết quả vào outputs
+```
+
+Tool `process_folder` sẽ kiểm kê file trong `inputs`:
+
+- đúng một `.xlsx` và một `.blend` → chạy Excel add-in rồi Blender add-on;
+- đúng một VBOM `.xml` và một `.blend` → áp VBOM bằng Blender add-on;
+- thiếu file, có nhiều file cùng loại hoặc có hai workflow cùng phù hợp → trả về
+  `needs_input` và yêu cầu chọn rõ, không tự đoán.
+
+Mọi đường dẫn tương đối được resolve từ thư mục project và vẫn phải qua
+`scoped_path`; không thể dùng `..` để đi ra ngoài phạm vi cho phép.
+
 ## Cấu hình máy
 
 Các đường dẫn cần đúng trong `config.json`:
