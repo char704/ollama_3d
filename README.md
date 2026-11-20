@@ -36,6 +36,30 @@ Mở <http://127.0.0.1:8080> và chọn model `ollama3d-direct`.
 
 ## Cập nhật trên máy công ty
 
+### Máy không có Git
+
+1. Tải [ZIP bản mới nhất](https://github.com/char704/ollama_3d/archive/refs/heads/main.zip).
+   Chờ job xong, đóng Blender, chạy `Stop.cmd` trong thư mục cũ rồi giải nén ZIP
+   vào **thư mục mới**. Giữ thư mục cũ để có thể quay lại.
+2. Gộp các đường dẫn riêng của máy vào `config.json` mới, nhất là Blender, Ollama,
+   Excel và thư mục dữ liệu. Nếu muốn tiếp tục dùng dữ liệu trong dự án cũ, sao chép
+   `inputs`, `outputs` và, nếu cần giữ dữ liệu Open WebUI, cả `webui-data` và
+   `.webui_secret_key` (nếu có). Nếu máy đã cấu hình thư mục dữ liệu ở ngoài
+   project, giữ các đường dẫn đó trong cấu hình mới.
+3. Mở PowerShell trong thư mục vừa giải nén và đồng bộ bản `jhv_dpc.py` có SQLite
+   nhận qua kênh nội bộ:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\Update.ps1 -SkipPull -JhvAddonPath 'E:\DuongDanNoiBo\jhv_dpc.py'
+   ```
+
+4. Chạy `Install.cmd` trong thư mục mới để tạo môi trường Python tại đúng đường dẫn.
+   Kiểm tra `Asset Library Path` trong Blender. Nếu thư viện chưa được lập chỉ mục
+   hoặc vừa thay đổi, mở Asset Browser để cập nhật metadata rồi bấm **Refresh Library
+   Cache** trong JHV. Các lần khởi động sau dùng `Open-WebUI.cmd`.
+
+### Máy có Git
+
 1. Chờ workflow đang chạy hoàn tất, rồi đóng Blender và chạy `Stop.cmd`. Sao lưu
    `config.json` và các file làm việc quan trọng. Giữ thư mục `webui-data` nếu
    muốn giữ cấu hình Open WebUI hiện tại.
