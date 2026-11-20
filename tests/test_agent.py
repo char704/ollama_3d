@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -26,56 +27,54 @@ class FakeClient:
             "think": False,
         }
 
+    def chat(self, model, messages):
+        self.calls.append({"role": "chat", "model": model, "messages": messages})
+        value = self.responses.pop(0)
+        return value["answer"], {"role": "chat", "model": model, "format": "text"}
+
 
 class AgentTests(unittest.TestCase):
-    def test_missing_paths_are_requested_without_execution(self):
-        client = FakeClient(
-            {"intent": "run_operator"},
-            {
-                "candidate_id": "blender.ollama3d_proof.apply_vbom",
-                "params": {"run_id": "TEST-RUN"},
-                "model_path": None,
-                "output_dir": None,
-            },
-        )
-        with patch.object(agent_run, "run_blender_operator") as execute:
-            result = agent_run.Agent(client).handle("Áp VBOM TEST-RUN nhưng chưa có đường dẫn")
-        self.assertEqual(result["status"], "needs_input")
-        self.assertIn("filepath", result["missing"])
-        self.assertIn("model_path", result["missing"])
-        execute.assert_not_called()
+    def test_full_pipeline_requires_model(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            directory = Path(folder)
+            (directory / "BOM.xlsx").touch()
+            client = FakeClient({"intent": "full_pipeline", "input_dir": folder})
+            with patch.object(agent_run, "execute_jhv") as execute:
+                result = agent_run.Agent(client).handle(f'Xử lý BOM trong "{folder}"')
+            self.assertEqual(result["missing"], ["model_path"])
+            execute.assert_not_called()
 
-    def test_operator_selection_is_validated_and_final_answer_is_templated(self):
-        vbom = str(ROOT / "tests" / "fixtures" / "proof_v1.vbom.xml")
-        model = str(ROOT / "inputs" / "Sneaker_Unassigned.blend")
-        output = str(ROOT / "outputs")
-        client = FakeClient(
-            {"intent": "run_operator"},
-            {
-                "candidate_id": "blender.ollama3d_proof.apply_vbom",
-                "params": {"filepath": vbom, "run_id": "TEST-RUN"},
-                "model_path": model,
-                "output_dir": output,
-            },
-        )
-        execution = {
-            "ok": True,
-            "status": "completed",
-            "output_path": str(ROOT / "outputs" / "run" / "result.blend"),
-        }
-        with patch.object(agent_run, "run_blender_operator", return_value=execution) as execute:
-            result = agent_run.Agent(client).handle("Áp file VBOM vào mẫu giày")
-        self.assertEqual(result["status"], "completed")
-        self.assertIn(execution["output_path"], result["message"])
-        execute.assert_called_once()
-        self.assertEqual([call["role"] for call in client.calls], ["router", "selector"])
-        self.assertEqual(
-            [call["model"] for call in client.calls],
-            [
-                agent_run.CONFIG["ollama"]["router_model"],
-                agent_run.CONFIG["ollama"]["model"],
-            ],
-        )
+    def test_export_only_ignores_blend_and_respects_paths(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            source = Path(folder) / "BOM.xlsx"
+            source.touch()
+            (Path(folder) / "Shoe.blend").touch()
+            output = Path(folder) / "output"
+            client = FakeClient({
+                "intent": "export_only", "input_dir": folder, "output_dir": str(output)
+            })
+            done = {"ok": True, "status": "completed", "output_path": "result.vbom"}
+            with patch.object(agent_run, "execute_jhv", return_value=done) as execute:
+                result = agent_run.Agent(client).handle(
+                    f'Chỉ xuất VBOM từ thư mục "{folder}" vào "{output}"'
+                )
+            self.assertTrue(result["ok"])
+            execute.assert_called_once_with(str(source), output, model_path=None, sheet_name="")
+
+    def test_excel_then_apply_corrects_misclassified_intent_using_file_types(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            excel = Path(folder) / "BOM.xlsx"
+            model = Path(folder) / "Shoe.blend"
+            excel.touch()
+            model.touch()
+            client = FakeClient({"intent": "apply_vbom", "vbom_path": str(model)})
+            done = {"ok": True, "status": "completed_with_warnings", "output_path": "result.blend",
+                    "warnings": ["PART_NOT_FOUND: example"]}
+            with patch.object(agent_run, "execute_jhv", return_value=done) as execute:
+                result = agent_run.Agent(client).handle(f'Xuất "{excel}" rồi áp lên "{model}"')
+            self.assertEqual(result["status"], "completed_with_warnings")
+            self.assertIn("PART_NOT_FOUND", result["message"])
+            self.assertEqual(execute.call_args.kwargs["model_path"], str(model))
 
     def test_chat_uses_router_and_utility_model_without_tools(self):
         client = FakeClient({"intent": "chat"}, {"answer": "VBOM mô tả vật liệu."})
@@ -95,36 +94,41 @@ class AgentTests(unittest.TestCase):
         operator.assert_not_called()
         workflow.assert_not_called()
 
-    def test_relative_folder_request_calls_folder_workflow(self):
-        client = FakeClient(
-            {"intent": "run_workflow"},
-            {
-                "candidate_id": "workflow.process_folder",
-                "inputs": {"input_dir": "inputs", "output_dir": "outputs"},
-            },
-        )
-        completed = {
-            "ok": True,
-            "status": "completed",
-            "output_path": "outputs/result.blend",
-        }
-        with patch.object(
-            agent_run, "process_folder", return_value=completed
-        ) as execute:
-            result = agent_run.Agent(client).handle(
-                "Xử lý folder inputs và xuất vào outputs"
-            )
-        self.assertEqual(result["status"], "completed")
-        execute.assert_called_once_with("inputs", "outputs")
+    def test_pending_code_keeps_previous_selection_and_is_single_use(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            directory = Path(folder)
+            for name in ("one.xlsx", "two.xlsx", "one.blend", "two.blend"):
+                (directory / name).touch()
+            client = FakeClient({"intent": "full_pipeline", "input_dir": folder})
+            agent = agent_run.Agent(client)
+            done = {"ok": True, "status": "completed", "output_path": "result.blend"}
+            with patch.object(agent_run, "execute_jhv", return_value=done) as execute:
+                first = agent.handle(f'Xử lý BOM trong "{folder}"')
+                second = agent.handle(first["continuation_code"] + " two.xlsx")
+                self.assertEqual(second["missing"], ["model_path"])
+                reply = second["continuation_code"] + " one.blend"
+                self.assertTrue(agent.handle(reply)["ok"])
+                self.assertFalse(agent.handle(reply)["ok"])
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[0], str(directory / "two.xlsx"))
+            self.assertEqual(execute.call_args.kwargs["model_path"], str(directory / "one.blend"))
+
+    def test_assistant_history_does_not_authorize_execution(self):
+        agent = agent_run.Agent(FakeClient({"intent": "chat"}, {"answer": "Giải thích"}))
+        history = [{"role": "assistant", "content": "Tôi đã kiểm tra thư mục `inputs`:"}]
+        with patch.object(agent_run, "execute_jhv") as execute:
+            result = agent.handle("Giải thích cách tạo file BOM", history)
+        self.assertEqual(result["status"], "chat")
+        execute.assert_not_called()
 
     def test_small_model_cannot_route_or_select_blender_work(self):
         self.assertEqual(
             agent_run.CONFIG["ollama"]["router_model"],
             agent_run.CONFIG["ollama"]["model"],
         )
-        self.assertNotEqual(
+        self.assertEqual(
             agent_run.CONFIG["ollama"]["utility_model"],
-            agent_run.CONFIG["ollama"]["router_model"],
+            agent_run.CONFIG["ollama"]["model"],
         )
 
     def test_retrieval_is_limited_to_five_candidates(self):

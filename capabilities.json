@@ -10,69 +10,13 @@
       "enabled": true
     },
     {
-      "id": "excel.ping",
-      "provider": "excel_vba",
-      "handler": "ping",
-      "target": "'Ollama3DProof.xlam'!Ollama3D_Ping",
-      "version": "1.0.0",
-      "enabled": true
-    },
-    {
-      "id": "excel.export_vbom",
-      "provider": "excel_vba",
-      "handler": "export_vbom",
-      "target": "'Ollama3DProof.xlam'!ExportVBOM",
-      "version": "1.0.0",
-      "enabled": true
-    },
-    {
-      "id": "blender.apply_vbom",
-      "provider": "blender_addon",
-      "handler": "apply_vbom",
-      "target": "ollama3d_proof.apply_vbom",
-      "version": "1.0.0",
-      "enabled": true
-    },
-    {
-      "id": "workflow.excel_to_blender",
-      "provider": "workflow",
-      "handler": "run_excel_to_blender",
-      "target": "workflow.excel_to_blender",
-      "dependencies": [
-        "excel.export_vbom",
-        "blender.apply_vbom"
-      ],
-      "instructions": "Dùng run_excel_to_blender chỉ cho yêu cầu xử lý rõ ràng có đủ excel_path, model_path và output_dir; chấp nhận đường dẫn tương đối trong project.",
-      "enabled": true
-    },
-    {
       "id": "workflow.process_folder",
       "provider": "workflow",
       "handler": "process_folder",
       "target": "workflow.process_folder",
-      "dependencies": [
-        "excel.export_vbom",
-        "blender.apply_vbom"
-      ],
-      "description": "Inspect a project-relative input folder and run the one unambiguous supported Excel/Blender workflow.",
-      "instructions": "Dùng process_folder khi người dùng chỉ cung cấp thư mục input/output tương đối. Không tự chọn nếu có nhiều file cùng loại hoặc nhiều workflow phù hợp.",
-      "enabled": true
-    },
-    {
-      "id": "blender.create_colored_primitive",
-      "provider": "blender_builtin",
-      "handler": "create_colored_primitive",
-      "target": "blender_runner.create_colored_primitive",
-      "settings": {
-        "primitives": [
-          "cube",
-          "uv_sphere",
-          "cylinder"
-        ],
-        "minimum_size": 0.01,
-        "maximum_size": 100
-      },
-      "instructions": "Dùng create_colored_primitive khi người dùng yêu cầu cube, UV sphere hoặc cylinder có màu và đã cung cấp output_dir trong project.",
+      "dependencies": [],
+      "description": "Inspect a folder and choose the unique JHV Excel-to-VBOM or Excel-to-Articles workflow.",
+      "instructions": "Use only when the user explicitly supplies an input folder; ask for missing or ambiguous inputs.",
       "enabled": true
     },
     {
@@ -100,6 +44,22 @@
       "target": "workflow.run_blender_workflow",
       "description": "Run a registered declarative multi-step Blender workflow in one verified session.",
       "instructions": "Chỉ dùng run_blender_workflow với workflow_id đã đăng ký và inputs đầy đủ; không tự tạo workflow_id hoặc biểu thức nội suy.",
+      "enabled": true
+    },
+    {
+      "id": "workflow.jhv_export_vbom",
+      "provider": "workflow",
+      "handler": "jhv_export_vbom",
+      "target": "workflow.jhv_export_vbom",
+      "description": "Export an Excel BOM to a new JHV V26-compatible VBOM without dialogs",
+      "enabled": true
+    },
+    {
+      "id": "workflow.jhv_excel_to_articles",
+      "provider": "workflow",
+      "handler": "jhv_excel_to_articles",
+      "target": "workflow.jhv_excel_to_articles",
+      "description": "Export JHV VBOM from Excel then run allowlisted jhv.run_dpc_automation to create Blender Articles",
       "enabled": true
     }
   ]

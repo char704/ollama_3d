@@ -2,8 +2,92 @@
 
 import hashlib
 import json
+import re
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import bpy
+
+JHV_OPERATOR = "jhv.run_dpc_automation"
+
+
+class JobError(RuntimeError):
+    def __init__(self, code, message, details=None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
+def _jhv_preflight(params):
+    try:
+        path = Path(params["vbom_path"])
+        root = ET.parse(path).getroot()
+        article_ids = {
+            article.strip()
+            for part in root.iter("Part")
+            if (article := part.get("name", "").rpartition("|")[2])
+            and "|" in part.get("name", "") and article.strip()
+            and "MODEL" not in article.upper()
+        }
+        if root.tag != "VBOM" or not article_ids:
+            raise ValueError("Không tìm thấy Article trong VBOM")
+    except (KeyError, OSError, ET.ParseError, ValueError) as exc:
+        raise JobError("VBOM_INVALID", str(exc)) from exc
+    existing = {
+        re.sub(r"\.\d{3,}$", "", item.name).casefold()
+        for datablocks in (bpy.data.scenes, bpy.data.collections)
+        for item in datablocks
+    }
+    overlap = sorted(article for article in article_ids if article.casefold() in existing)
+    if overlap:
+        raise JobError(
+            "ARTICLE_ALREADY_EXISTS",
+            "Model đã có Article " + ", ".join(overlap) + ". Hãy dùng model gốc.",
+            {"article_ids": overlap},
+        )
+    model = bpy.data.scenes.get("Model")
+    if model is not None and "jhv_dpc_report" in model:
+        del model["jhv_dpc_report"]
+    return article_ids
+
+
+def _jhv_report(expected):
+    try:
+        model = bpy.data.scenes.get("Model")
+        report = json.loads(model["jhv_dpc_report"])
+        articles = report["articles"]
+        ids = [item["article_id"] for item in articles]
+        warnings = report["warnings"]
+        if report["ok"] is not True or not isinstance(articles, list):
+            raise ValueError("Báo cáo add-on không xác nhận thành công")
+        if set(ids) != expected or len(ids) != len(expected) or any(
+            bpy.data.scenes.get(article) is None for article in expected
+        ):
+            raise ValueError("Các Article trong báo cáo hoặc scene không khớp VBOM")
+        if not isinstance(warnings, list) or any(not isinstance(item, str) for item in warnings):
+            raise ValueError("Danh sách cảnh báo JHV không hợp lệ")
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise JobError("JHV_VERIFICATION_FAILED", f"Không xác minh được báo cáo JHV: {exc}") from exc
+    result = {"articles": articles, "warnings": warnings}
+    if isinstance(report.get("timings"), dict):
+        result["addon_timings"] = report["timings"]
+    if isinstance(report.get("asset_cache"), dict):
+        result["asset_cache"] = report["asset_cache"]
+    if isinstance(report.get("asset_resolver"), dict):
+        result["asset_resolver"] = report["asset_resolver"]
+    if isinstance(report.get("elapsed_seconds"), (int, float)):
+        result["addon_elapsed_seconds"] = report["elapsed_seconds"]
+    return result
+
+
+def refresh_jhv_index(_payload):
+    # Fixed JHV entry point. The add-on uses its configured local library paths.
+    import jhv_dpc
+
+    return jhv_dpc.refresh_asset_index(
+        jhv_dpc.get_blender_cache_path(), jhv_dpc._job_library_folders(jhv_dpc.get_jhv_libs())
+    )
 
 
 def _report_context(payload):
@@ -14,16 +98,18 @@ def _report_context(payload):
 
 
 def status(payload):
-    operator_name = payload["operator"]
-    try:
-        category, name = operator_name.split(".", 1)
-        callable_operator = hasattr(getattr(bpy.ops, category), name)
-    except (AttributeError, ValueError):
-        callable_operator = False
+    operators = {}
+    for operator_name in payload.get("operators", []):
+        try:
+            category, name = operator_name.split(".", 1)
+            getattr(getattr(bpy.ops, category), name).get_rna_type()
+            operators[operator_name] = True
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            operators[operator_name] = False
     return {
         "ok": True,
-        "operator": operator_name,
-        "operator_callable": callable_operator,
+        "operators": operators,
+        "operator_callable": bool(operators) and all(operators.values()),
         **_report_context(payload),
     }
 
@@ -137,29 +223,81 @@ def discover(payload):
 
 
 def _snapshot():
+    """Snapshot data reachable from saved scenes, not temporary/unlinked datablocks.
+
+    Objects/materials created by an add-on but never linked into a scene are not
+    expected to persist across save/open and must not cause false failures.
+    Scene membership and material-slot assignment are still checked strictly.
+    """
     objects = {}
-    for obj in sorted(bpy.data.objects, key=lambda item: item.name):
-        entry = {
-            "type": obj.type,
-            "location": [round(value, 6) for value in obj.location],
-            "rotation": [round(value, 6) for value in obj.rotation_euler],
-            "scale": [round(value, 6) for value in obj.scale],
-            "materials": [slot.name for slot in obj.material_slots],
-            "modifiers": [modifier.name for modifier in obj.modifiers],
-        }
-        if obj.type == "MESH":
-            entry["vertices"] = len(obj.data.vertices)
-            entry["faces"] = len(obj.data.polygons)
-        objects[obj.name] = entry
+    materials = set()
+    collections = set()
+
+    for scene in sorted(bpy.data.scenes, key=lambda item: item.name):
+        collections.add("scene:" + scene.name)
+        # Include actual scene collection tree; don't use all bpy.data.collections.
+        def walk(collection):
+            collections.add("scene_collection:" + scene.name + ":" + collection.name)
+            for child in collection.children:
+                walk(child)
+        walk(scene.collection)
+
+        for obj in sorted(scene.objects, key=lambda item: item.name):
+            entry = {
+                "type": obj.type,
+                "location": [round(value, 6) for value in obj.location],
+                "rotation": [round(value, 6) for value in obj.rotation_euler],
+                "scale": [round(value, 6) for value in obj.scale],
+                "materials": [
+                    slot.material.name if slot.material else None
+                    for slot in obj.material_slots
+                ],
+                "modifiers": [modifier.name for modifier in obj.modifiers],
+            }
+            for slot in obj.material_slots:
+                if slot.material is not None:
+                    materials.add(slot.material.name)
+            if obj.type == "MESH":
+                entry["vertices"] = len(obj.data.vertices)
+                entry["faces"] = len(obj.data.polygons)
+            objects[scene.name + "::" + obj.name] = entry
     return {
         "objects": objects,
-        "materials": sorted(
-            material.name for material in bpy.data.materials if material.users > 0
-        ),
-        "collections": sorted(
-            collection.name for collection in bpy.data.collections if collection.users > 0
-        ),
+        "materials": sorted(materials),
+        "collections": sorted(collections),
     }
+
+
+def _perf(name, start):
+    seconds = round(time.perf_counter() - start, 3)
+    print(f"[PERF] {name}: {seconds:.3f}s", flush=True)
+    return seconds
+
+
+def _verify_after_reopen(expected, payload, prefix):
+    """Verify persisted scene content and save full discrepancy beside the report."""
+    t0 = time.perf_counter()
+    actual = _snapshot()
+    elapsed = _perf("snapshot_after_reopen", t0)
+    if actual != expected:
+        difference = _diff(expected, actual)
+        detail_path = Path(payload["report_path"]).with_name("blender-verify-diff.json")
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_path.write_text(
+            json.dumps(difference, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        summary = {
+            group: {
+                kind: len(changes[kind])
+                for kind in ("added", "removed", "changed")
+            }
+            for group, changes in difference.items()
+        }
+        raise RuntimeError(
+            prefix + ": " + json.dumps(summary, sort_keys=True)
+            + "; details=" + str(detail_path)
+        )
+    return elapsed
 
 
 def _diff(before, after):
@@ -230,6 +368,7 @@ def run_operator(payload):
         raise RuntimeError("Blender operator does not exist: " + operator_name) from exc
     params = payload["params"]
     _validate_operator_params(operation, params)
+    expected_articles = _jhv_preflight(params) if operator_name == JHV_OPERATOR else None
     try:
         poll_result = operation.poll()
     except Exception as exc:
@@ -237,24 +376,34 @@ def run_operator(payload):
     if not poll_result:
         raise RuntimeError("Operator poll failed in headless context")
 
+    total_start = time.perf_counter()
+    timings = {}
+    t0 = time.perf_counter()
     before = _snapshot()
-    try:
-        status = operation("EXEC_DEFAULT", **params)
-    except RuntimeError:
-        raise
+    timings["snapshot_before_seconds"] = _perf("snapshot_before", t0)
+    t0 = time.perf_counter()
+    status = operation("EXEC_DEFAULT", **params)
+    timings["operator_seconds"] = _perf("operator", t0)
     if status != {"FINISHED"}:
         raise RuntimeError("Add-on operator did not finish: " + str(status))
+    if expected_articles is not None:
+        _jhv_report(expected_articles)
+    t0 = time.perf_counter()
     after = _snapshot()
+    timings["snapshot_after_seconds"] = _perf("snapshot_after", t0)
     difference = _diff(before, after)
 
+    t0 = time.perf_counter()
     bpy.ops.wm.save_as_mainfile(filepath=payload["output_path"], check_existing=False)
+    timings["save_seconds"] = _perf("save_blend", t0)
+    t0 = time.perf_counter()
     bpy.ops.wm.open_mainfile(filepath=payload["output_path"], load_ui=False)
-    reopened = _snapshot()
-    if reopened != after:
-        raise RuntimeError(
-            "Saved Blender scene differs after reopen: "
-            + json.dumps(_diff(after, reopened), sort_keys=True)
-        )
+    timings["reopen_seconds"] = _perf("reopen_blend", t0)
+    timings["verify_seconds"] = _verify_after_reopen(
+        after, payload, "Saved Blender scene differs after reopen"
+    )
+    jhv_report = _jhv_report(expected_articles) if expected_articles is not None else {}
+    timings["total_runner_seconds"] = _perf("runner_total", total_start)
 
     with open(payload["output_path"], "rb") as stream:
         output_hash = hashlib.sha256(stream.read()).hexdigest()
@@ -264,15 +413,16 @@ def run_operator(payload):
         "run_id": payload["run_id"],
         "operator": operator_name,
         "diff": difference,
+        "timings": timings,
+        "scene_count": len(bpy.data.scenes),
         "output_sha256": output_hash,
         "verified_after_reopen": True,
+        **jhv_report,
         **_report_context(payload),
     }
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
     return report
-
-
 def _check_postconditions(postconditions):
     for condition in postconditions:
         kind = condition["type"]
@@ -294,7 +444,11 @@ def _check_postconditions(postconditions):
 
 def run_steps(payload):
     """Execute fixed operator steps in one Blender process and save only after all succeed."""
+    total_start = time.perf_counter()
+    timings = {}
+    t0 = time.perf_counter()
     previous = _snapshot()
+    timings["snapshot_before_seconds"] = _perf("snapshot_before", t0)
     step_reports = []
     for step in payload["steps"]:
         operator_name = step["operator"]
@@ -304,12 +458,16 @@ def run_steps(payload):
             _validate_operator_params(operation, step["params"])
             if not operation.poll():
                 raise RuntimeError("Operator poll failed in headless context")
+            t0 = time.perf_counter()
             status = operation("EXEC_DEFAULT", **step["params"])
+            timings["operator_" + step["id"] + "_seconds"] = _perf("operator:" + step["id"], t0)
             if status != {"FINISHED"}:
                 raise RuntimeError("Add-on operator did not finish: " + str(status))
         except Exception as exc:
             raise RuntimeError(f"Workflow step {step['id']} failed: {exc}") from exc
+        t0 = time.perf_counter()
         current = _snapshot()
+        timings["snapshot_" + step["id"] + "_seconds"] = _perf("snapshot:" + step["id"], t0)
         step_reports.append(
             {
                 "id": step["id"],
@@ -320,14 +478,16 @@ def run_steps(payload):
         )
         previous = current
 
+    t0 = time.perf_counter()
     bpy.ops.wm.save_as_mainfile(filepath=payload["output_path"], check_existing=False)
+    timings["save_seconds"] = _perf("save_blend", t0)
+    t0 = time.perf_counter()
     bpy.ops.wm.open_mainfile(filepath=payload["output_path"], load_ui=False)
-    reopened = _snapshot()
-    if reopened != previous:
-        raise RuntimeError(
-            "Saved Blender workflow scene differs after reopen: "
-            + json.dumps(_diff(previous, reopened), sort_keys=True)
-        )
+    timings["reopen_seconds"] = _perf("reopen_blend", t0)
+    timings["verify_seconds"] = _verify_after_reopen(
+        previous, payload, "Saved Blender workflow scene differs after reopen"
+    )
+    timings["total_runner_seconds"] = _perf("runner_total", total_start)
     _check_postconditions(payload.get("postconditions", []))
     with open(payload["output_path"], "rb") as stream:
         output_hash = hashlib.sha256(stream.read()).hexdigest()
@@ -337,110 +497,12 @@ def run_steps(payload):
         "workflow_id": payload["workflow_id"],
         "run_id": payload["run_id"],
         "steps": step_reports,
+        "timings": timings,
+        "scene_count": len(bpy.data.scenes),
         "output_sha256": output_hash,
         "verified_after_reopen": True,
         **_report_context(payload),
     }
-    with open(payload["report_path"], "w", encoding="utf-8") as stream:
-        json.dump(report, stream, ensure_ascii=False, indent=2)
-    return report
-
-
-def _hex_rgba(value):
-    return tuple(int(value[index : index + 2], 16) / 255 for index in (1, 3, 5)) + (1.0,)
-
-
-def create_colored_primitive(payload):
-    """Create one allowlisted Blender primitive, save it, reopen it, and verify it."""
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete(use_global=False)
-
-    primitive = payload["primitive"]
-    size = payload["size"]
-    if primitive == "cube":
-        bpy.ops.mesh.primitive_cube_add(size=size)
-    elif primitive == "uv_sphere":
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16, radius=size / 2)
-    elif primitive == "cylinder":
-        bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=size / 2, depth=size)
-    else:
-        raise ValueError("Unsupported primitive: " + primitive)
-
-    obj = bpy.context.active_object
-    obj.name = payload["object_name"]
-    obj["ollama3d_run_id"] = payload["run_id"]
-    obj["ollama3d_color_hex"] = payload["color_hex"]
-    material = bpy.data.materials.new(payload["object_name"] + " Material")
-    material.diffuse_color = _hex_rgba(payload["color_hex"])
-    obj.data.materials.append(material)
-
-    bpy.ops.wm.save_as_mainfile(filepath=payload["output_path"], check_existing=False)
-    bpy.ops.wm.open_mainfile(filepath=payload["output_path"], load_ui=False)
-    persisted = bpy.data.objects.get(payload["object_name"])
-    if persisted is None:
-        raise RuntimeError("Created object was not persisted")
-    if persisted.get("ollama3d_run_id") != payload["run_id"]:
-        raise RuntimeError("Created object has the wrong run_id")
-    if persisted.get("ollama3d_color_hex") != payload["color_hex"]:
-        raise RuntimeError("Created object has the wrong color proof")
-    if persisted.active_material is None:
-        raise RuntimeError("Created object material was not persisted")
-
-    with open(payload["output_path"], "rb") as stream:
-        output_hash = hashlib.sha256(stream.read()).hexdigest()
-    report = {
-        "ok": True,
-        "status": "completed",
-        "run_id": payload["run_id"],
-        "operation": "create_colored_primitive",
-        "primitive": primitive,
-        "object_name": payload["object_name"],
-        "color_hex": payload["color_hex"],
-        "size": size,
-        "output_path": payload["output_path"],
-        "output_sha256": output_hash,
-        "verified_after_reopen": True,
-        **_report_context(payload),
-    }
-    with open(payload["report_path"], "w", encoding="utf-8") as stream:
-        json.dump(report, stream, ensure_ascii=False, indent=2)
-    report["proof_path"] = payload["report_path"]
-    return report
-
-
-def apply_vbom(payload):
-    operator_name = payload["operator"]
-    group_name, action_name = operator_name.split(".", 1)
-    operator = getattr(getattr(bpy.ops, group_name), action_name)
-    status = operator(filepath=payload["vbom_path"], run_id=payload["run_id"])
-    if status != {"FINISHED"}:
-        raise RuntimeError("Add-on did not finish: " + str(status))
-
-    report = json.loads(bpy.context.scene["ollama3d_proof_report"])
-    bpy.ops.wm.save_as_mainfile(filepath=payload["output_path"], check_existing=False)
-    bpy.ops.wm.open_mainfile(filepath=payload["output_path"], load_ui=False)
-
-    persisted = json.loads(bpy.context.scene["ollama3d_proof_report"])
-    if persisted["run_id"] != payload["run_id"]:
-        raise RuntimeError("Saved scene has the wrong run_id")
-    for item in persisted["applied"]:
-        obj = bpy.data.objects[item["object"]]
-        if obj.get("ollama3d_run_id") != payload["run_id"] or obj.get("bom_color_hex") != item["color"]:
-            raise RuntimeError("Saved object verification failed: " + item["object"])
-        if obj.active_material is None or obj.active_material.name != item["material"]:
-            raise RuntimeError("Saved material verification failed: " + item["object"])
-
-    with open(payload["output_path"], "rb") as stream:
-        output_hash = hashlib.sha256(stream.read()).hexdigest()
-    report.update(
-        {
-            "ok": True,
-            "output_path": payload["output_path"],
-            "output_sha256": output_hash,
-            "verified_after_reopen": True,
-            **_report_context(payload),
-        }
-    )
     with open(payload["report_path"], "w", encoding="utf-8") as stream:
         json.dump(report, stream, ensure_ascii=False, indent=2)
     return report

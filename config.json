@@ -4,7 +4,6 @@
   "paths": {
     "inputs": "inputs",
     "outputs": "outputs",
-    "default_model": "inputs/Sneaker_Unassigned.blend",
     "blender_exe": "E:/Blender/blender.exe",
     "allowed_roots": []
   },
@@ -16,21 +15,18 @@
   "ollama": {
     "model": "qwen3.5:4b",
     "router_model": "qwen3.5:4b",
-    "utility_model": "qwen3.5:0.8b",
+    "utility_model": "qwen3.5:4b",
     "executable": "E:/3d/Ollama/app/ollama.exe",
     "models_directory": "E:/3d/Ollama/models"
   },
-  "excel_vba": {
-    "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
-    "addin_path": "excel/Ollama3DProof.xlam",
-    "timeout_seconds": 90
-  },
-  "blender_addon": {
-    "module": "ollama3d_proof_addon",
-    "package": "dist/ollama3d_proof_addon.zip",
-    "timeout_seconds": 180
-  },
   "workflow": {
     "max_concurrent_runs": 1
+  },
+  "excel": {
+    "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
+    "timeout_seconds": 90
+  },
+  "blender": {
+    "timeout_seconds": 180
   }
 }

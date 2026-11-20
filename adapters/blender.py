@@ -5,22 +5,27 @@ import json
 import os
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 
-from .common import BLENDER, CONFIG, REGISTRY, ROOT
+from .common import BLENDER, CONFIG, REGISTRY, ROOT, write_json
 
 _lock = threading.Lock()
+
+
+class BlenderJobError(RuntimeError):
+    def __init__(self, message, code=None, details=None):
+        super().__init__(message)
+        self.code = code or "BLENDER_EXECUTION_FAILED"
+        self.details = details or {}
+
+
 class BlenderAdapter:
     """Run approved operations in a short-lived local Blender process."""
 
     def __init__(self):
-        addon = CONFIG["blender_addon"]
-        self.module = addon["module"]
-        self.operator = REGISTRY.require(
-            "blender.apply_vbom", provider="blender_addon", handler="apply_vbom"
-        )["target"]
-        self.timeout = addon.get("timeout_seconds", 180)
+        self.timeout = CONFIG["blender"]["timeout_seconds"]
 
     @property
     def transport_name(self):
@@ -34,11 +39,11 @@ class BlenderAdapter:
             command.append("--factory-startup")
         if model_path is not None:
             command.append(str(model_path))
-        addon_modules = modules if modules is not None else [self.module]
+        addon_modules = modules if modules is not None else REGISTRY.addon_modules()
+        if addon_modules:
+            command.extend(["--addons", ",".join(addon_modules)])
         command.extend(
             [
-                "--addons",
-                ",".join(addon_modules),
                 "--python-exit-code",
                 "1",
                 "--python",
@@ -67,6 +72,7 @@ class BlenderAdapter:
             encoding="utf-8",
         )
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        started = time.perf_counter()
         try:
             with Path(log_path).open("w", encoding="utf-8") as stream:
                 completed = subprocess.run(
@@ -85,9 +91,30 @@ class BlenderAdapter:
         if not result_path.is_file():
             raise RuntimeError(f"Blender subprocess exited with code {completed.returncode} without a result")
         envelope = json.loads(result_path.read_text(encoding="utf-8"))
+        seconds = round(time.perf_counter() - started, 3)
+        with Path(log_path).open("a", encoding="utf-8") as stream:
+            stream.write(f"\n[PERF] blender_subprocess_wall: {seconds:.3f}s\n")
         if completed.returncode != 0 or not envelope.get("ok"):
-            raise RuntimeError(envelope.get("error", f"Blender subprocess exited with code {completed.returncode}"))
-        return envelope["result"]
+            raise BlenderJobError(
+                envelope.get("error", f"Blender subprocess exited with code {completed.returncode}"),
+                envelope.get("error_code"), envelope.get("details"),
+            )
+        result = envelope["result"]
+        if operation in ("run_operator", "run_steps") and isinstance(result, dict):
+            result.setdefault("timings", {})["blender_subprocess_wall_seconds"] = seconds
+        return result
+
+    def refresh_jhv_index(self):
+        if not _lock.acquire(blocking=False):
+            raise RuntimeError("Blender is busy; wait for the active job to finish")
+        try:
+            return self._run_job(
+                "refresh_jhv_index", {},
+                ROOT / "runtime" / "blender-subprocess-jhv-index.log",
+                timeout=max(self.timeout, 1800), modules=["jhv_dpc"],
+            )
+        finally:
+            _lock.release()
 
     def discover(self, modules, directory):
         if not modules:
@@ -120,59 +147,21 @@ class BlenderAdapter:
             return report
         finally:
             _lock.release()
-
     def status(self, directory):
         directory = Path(directory)
         result = self._run_job(
             "status",
-            {"operator": self.operator},
+            {"operators": [item["target"] for item in REGISTRY.generic_capabilities()]},
             directory / "blender-subprocess-status.log",
             timeout=60,
         )
-        if not result.get("operator_callable"):
-            raise RuntimeError(f"Blender operator is not callable: {self.operator}")
         return {
             "installed": True,
-            "addon_loaded": True,
+            "addon_loaded": any(result.get("operators", {}).values()),
             "transport_callable": True,
-            "operator": self.operator,
             "executable": str(BLENDER),
             **result,
         }
-
-    def apply(self, vbom_path, model_path, output_path, report_path, run_id):
-        if not _lock.acquire(blocking=False):
-            raise RuntimeError("Blender is busy; wait for the active job to finish")
-        try:
-            payload = {
-                "vbom_path": str(Path(vbom_path).resolve()),
-                "output_path": str(Path(output_path).resolve()),
-                "report_path": str(Path(report_path).resolve()),
-                "run_id": run_id,
-                "operator": self.operator,
-            }
-            result = self._run_job(
-                "apply_vbom",
-                payload,
-                Path(report_path).with_name("blender-subprocess.log"),
-                model_path=model_path,
-            )
-            if not Path(output_path).is_file() or not Path(report_path).is_file():
-                raise RuntimeError("Blender job did not create the model and proof report")
-            if (
-                not result.get("ok")
-                or result.get("producer") != "ollama3d-blender-addon"
-                or result.get("run_id") != run_id
-                or result.get("operator") != self.operator
-                or not result.get("verified_after_reopen")
-                or result.get("transport") != self.transport_name
-                or result.get("output_sha256")
-                != hashlib.sha256(Path(output_path).read_bytes()).hexdigest()
-            ):
-                raise RuntimeError("Blender proof does not match the current run")
-            return result
-        finally:
-            _lock.release()
 
     def run_operator(
         self, capability, params, model_path, output_path, report_path, run_id
@@ -181,7 +170,7 @@ class BlenderAdapter:
             raise RuntimeError("Blender is busy; wait for the active job to finish")
         try:
             modules = REGISTRY.addon_modules()
-            for module in (capability["addon_module"], self.module):
+            for module in (capability["addon_module"],):
                 if module not in modules:
                     modules.append(module)
             payload = {
@@ -215,6 +204,9 @@ class BlenderAdapter:
                     or proof.get("output_sha256") != expected_hash
                 ):
                     raise RuntimeError("Blender operator proof does not match the current run")
+            if "asset_resolver" in report:
+                report["timings"]["blender_subprocess_wall_seconds"] = result["timings"]["blender_subprocess_wall_seconds"]
+                write_json(report_path, report)
             return result
         finally:
             _lock.release()
@@ -230,8 +222,6 @@ class BlenderAdapter:
                 module = step["capability"]["addon_module"]
                 if module not in modules:
                     modules.append(module)
-            if self.module not in modules:
-                modules.append(self.module)
             runner_steps = [
                 {
                     "id": step["id"],
@@ -273,44 +263,6 @@ class BlenderAdapter:
                     or proof.get("output_sha256") != expected_hash
                 ):
                     raise RuntimeError("Blender workflow proof does not match the current run")
-            return result
-        finally:
-            _lock.release()
-
-    def create_colored_primitive(
-        self, primitive, color_hex, size, object_name, output_path, report_path, run_id
-    ):
-        if not _lock.acquire(blocking=False):
-            raise RuntimeError("Blender is busy; wait for the active job to finish")
-        try:
-            payload = {
-                "primitive": primitive,
-                "color_hex": color_hex,
-                "size": size,
-                "object_name": object_name,
-                "output_path": str(Path(output_path).resolve()),
-                "report_path": str(Path(report_path).resolve()),
-                "run_id": run_id,
-            }
-            result = self._run_job(
-                "create_colored_primitive",
-                payload,
-                Path(report_path).with_name("blender-subprocess.log"),
-                timeout=self.timeout,
-            )
-            if not Path(output_path).is_file() or not Path(report_path).is_file():
-                raise RuntimeError("Blender job did not create the primitive and proof report")
-            if (
-                not result.get("ok")
-                or result.get("run_id") != run_id
-                or result.get("primitive") != primitive
-                or result.get("color_hex") != color_hex
-                or not result.get("verified_after_reopen")
-                or result.get("transport") != self.transport_name
-                or result.get("output_sha256")
-                != hashlib.sha256(Path(output_path).read_bytes()).hexdigest()
-            ):
-                raise RuntimeError("Blender primitive proof does not match the current run")
             return result
         finally:
             _lock.release()

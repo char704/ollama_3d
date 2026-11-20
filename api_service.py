@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict
 from adapters.common import BLENDER, CONFIG, ROOT
 from agent.run import handle
 from workflows.folder_workflow import process_folder
-from workflows.core_workflow import run_excel_to_blender, system_status
+from workflows.core_workflow import system_status
+from workflows.jhv_workflow import execute_jhv
 
 MODEL_ID = "ollama3d-direct"
 LOCAL_API_KEY = "ollama3d-local"
@@ -20,7 +21,7 @@ LOCAL_API_KEY = "ollama3d-local"
 app = FastAPI(
     title="Ollama3D Direct Agent",
     version="6.0.0",
-    description="Local REST agent backed by Ollama, Excel COM/VBA, and Blender subprocess jobs.",
+    description="Local REST agent backed by Ollama, JHV Excel COM, and Blender subprocess jobs.",
 )
 
 
@@ -39,14 +40,15 @@ class ChatRequest(BaseModel):
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     excel_path: str
-    model_path: str
-    output_dir: str
+    model_path: str | None = None
+    output_dir: str | None = None
+    sheet_name: str = ""
 
 
 class FolderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    input_dir: str = "inputs"
-    output_dir: str = "outputs"
+    input_dir: str | None = None
+    output_dir: str | None = None
 
 
 def require_local_key(authorization: str | None = Header(default=None)):
@@ -73,6 +75,18 @@ def _latest_user_message(messages):
             if text:
                 return text
     raise ValueError("A non-empty user message is required")
+
+
+def _conversation_history(messages):
+    """Preserve only user/assistant turns, excluding external system/tool messages."""
+    result = []
+    for item in messages:
+        if item.role not in ("user", "assistant"):
+            continue
+        content = _message_text(item.content).strip()
+        if content:
+            result.append({"role": item.role, "content": content})
+    return result
 
 
 def _chat_payload(content, completion_id, created):
@@ -139,7 +153,10 @@ def models():
 def chat_completions(body: ChatRequest):
     if body.model != MODEL_ID:
         raise HTTPException(status_code=404, detail="Unknown model")
-    result = handle(_latest_user_message(body.messages))
+    result = handle(
+        _latest_user_message(body.messages),
+        history=_conversation_history(body.messages),
+    )
     content = result.get("message") or json.dumps(result, ensure_ascii=False)
     completion_id = "chatcmpl-" + uuid.uuid4().hex
     created = int(time.time())
@@ -168,16 +185,16 @@ def chat_completions(body: ChatRequest):
     return StreamingResponse(events(), media_type="text/event-stream")
 
 
-@app.get("/proof/status", tags=["Diagnostics"])
-def proof_status():
+@app.get("/integrations/status", tags=["Diagnostics"])
+def integration_status():
     return system_status()
 
 
-@app.post("/proof/run", tags=["Diagnostics"])
-def proof_run(body: RunRequest):
-    return run_excel_to_blender(body.excel_path, body.model_path, body.output_dir)
+@app.post("/jhv/run", tags=["Workflows"])
+def jhv_run(body: RunRequest):
+    return execute_jhv(body.excel_path, body.output_dir, body.model_path, sheet_name=body.sheet_name)
 
 
-@app.post("/proof/process-folder", tags=["Diagnostics"])
-def proof_process_folder(body: FolderRequest):
+@app.post("/jhv/process-folder", tags=["Workflows"])
+def jhv_process_folder(body: FolderRequest):
     return process_folder(body.input_dir, body.output_dir)

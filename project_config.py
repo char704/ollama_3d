@@ -54,22 +54,18 @@ def load(path=None):
         if not isinstance(ollama.get(key), str) or not ollama[key].strip():
             raise ValueError(f"config.json: ollama.{key} is required")
 
-    excel = config.get("excel_vba", {})
-    for key in ("executable", "addin_path"):
+    excel = config.get("excel", {})
+    for key in ("executable",):
         if not isinstance(excel.get(key), str) or not excel[key].strip():
-            raise ValueError(f"config.json: excel_vba.{key} is required")
+            raise ValueError(f"config.json: excel.{key} is required")
     if type(excel.get("timeout_seconds")) is not int or not 15 <= excel["timeout_seconds"] <= 600:
-        raise ValueError("config.json: excel_vba.timeout_seconds is invalid")
+        raise ValueError("config.json: excel.timeout_seconds is invalid")
 
-    addon = config.get("blender_addon", {})
-    if not isinstance(addon.get("package"), str) or not addon["package"].strip():
-        raise ValueError("config.json: blender_addon.package is required")
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", addon.get("module", "")):
-        raise ValueError("config.json: blender_addon.module is invalid")
+    addon = config.get("blender", {})
     if type(addon.get("timeout_seconds")) is not int or not 30 <= addon["timeout_seconds"] <= 600:
-        raise ValueError("config.json: blender_addon.timeout_seconds is invalid")
+        raise ValueError("config.json: blender.timeout_seconds is invalid")
     paths = config.get("paths", {})
-    for key in ("inputs", "outputs", "default_model", "blender_exe"):
+    for key in ("inputs", "outputs", "blender_exe"):
         if not isinstance(paths.get(key), str) or not paths[key].strip():
             raise ValueError(f"config.json: paths.{key} is required")
     if not isinstance(paths.get("allowed_roots", []), list):
@@ -103,7 +99,7 @@ def scoped_path(config, value, default=None):
         data_path(config, "outputs"),
         *[resolve(config, item) for item in config["paths"].get("allowed_roots", [])],
     ]
-    if path != data_path(config, "default_model") and not any(
+    if not any(
         path.is_relative_to(item) for item in allowed
     ):
         raise ValueError(

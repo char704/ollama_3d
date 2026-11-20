@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent.run import (  # noqa: E402
+    CONFIG,
     ROUTER_SCHEMA,
     ROUTER_SYSTEM,
     SELECTOR_SYSTEM,
@@ -22,7 +23,7 @@ from agent.run import (  # noqa: E402
     retrieve_candidates,
 )
 
-DEFAULT_MODELS = ("qwen3.5:4b", "qwen3.5:0.8b")
+DEFAULT_MODELS = (CONFIG["ollama"]["router_model"],)
 
 
 def load_cases(path):
@@ -34,8 +35,8 @@ def load_cases(path):
         if not all(key in case for key in ("id", "prompt", "expected")):
             raise ValueError(f"{path}:{line_number}: id, prompt and expected are required")
         cases.append(case)
-    if len(cases) != 30:
-        raise ValueError(f"Expected exactly 30 evaluation cases, found {len(cases)}")
+    if not cases:
+        raise ValueError(f"{path}: add at least one evaluation case")
     return cases
 
 

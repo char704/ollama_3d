@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from tests.blender_fixtures import save_fixture_model
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,15 +123,14 @@ class AddonPackAcceptanceTests(unittest.TestCase):
     @patch.object(operator_workflow, "log")
     def test_add_enable_and_run_fixture_without_python_changes(self, _log):
         fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
-        proof = ROOT / "blender" / "ollama3d_proof_addon"
-        model = ROOT / "inputs" / "Sneaker_Unassigned.blend"
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             folder = Path(folder)
+            model = folder / "fixture.blend"
+            save_fixture_model(model)
             scripts = folder / "scripts"
             addons = scripts / "addons"
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
-            shutil.copytree(proof, addons / proof.name)
             with patch.dict(os.environ, {"BLENDER_USER_SCRIPTS": str(scripts)}):
                 manage.addon_add(CONFIG, fixture.name, root=folder)
                 pack_path = folder / "addons" / fixture.name / "addon.json"

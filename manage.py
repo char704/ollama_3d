@@ -104,7 +104,6 @@ def fingerprint(service):
                 *sorted((ROOT / "adapters").glob("*.py")),
                 *sorted((ROOT / "workflows").glob("*.py")),
                 ROOT / "blender/blender_runner.py",
-                *sorted((ROOT / "blender" / "ollama3d_proof_addon").glob("*.py")),
             ]
         )
     return hashlib.sha256(b"".join(path.read_bytes() for path in paths)).hexdigest()
@@ -305,46 +304,18 @@ def ensure_ollama(config, pull=False):
 
 
 def ensure_integrations(config):
+    """Probe Blender and Excel executable without installing demo plugins."""
     from adapters.blender import BlenderAdapter
-    from adapters.excel_vba import ExcelVbaAdapter
-
-    excel = ExcelVbaAdapter().status()
-    say(f"Excel VBA ready: {excel['addin_version']} (macro callable)")
-    settings = config["blender_addon"]
-    package = resolve(config, settings["package"])
-    source = ROOT / "blender" / settings["module"]
-    package.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(package, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(source.rglob("*")):
-            if path.is_file() and "__pycache__" not in path.parts:
-                archive.write(path, path.relative_to(source.parent).as_posix())
-    report = ROOT / "runtime/install-blender-addon.json"
-    report.parent.mkdir(exist_ok=True)
-    subprocess.run(
-        [
-            str(data_path(config, "blender_exe")),
-            "--background",
-            "--python-exit-code",
-            "1",
-            "--python",
-            str(ROOT / "blender/install_proof_addon.py"),
-            "--",
-            str(package),
-            settings["module"],
-            str(report),
-        ],
-        check=True,
-        creationflags=FLAGS,
-        timeout=settings["timeout_seconds"],
-    )
-    say("Blender subprocess transport ready.")
-    probe_directory = ROOT / "runtime/probes"
+    excel_exe = Path(config["excel"]["executable"])
+    if not excel_exe.is_file():
+        raise FileNotFoundError(f"Excel executable not found: {excel_exe}")
+    say("Excel executable ready (no demo add-in required).")
+    probe_directory = ROOT / "runtime" / "probes"
     probe_directory.mkdir(parents=True, exist_ok=True)
-    blender = BlenderAdapter().status(probe_directory)
-    say(
-        f"Blender add-on ready through {blender['transport']} "
-        f"(operator callable: {blender['operator']})"
-    )
+    report = BlenderAdapter().status(probe_directory)
+    if not report.get("operators", {}).get("jhv.run_dpc_automation"):
+        raise RuntimeError("Install and enable jhv_dpc in the configured Blender before running JHV.")
+    say(f"Blender subprocess ready ({len(report.get('operators', {}))} registered operators checked).")
 
 
 def sync_webui(config):
@@ -361,7 +332,7 @@ def sync_webui(config):
     api(
         "/ollama/config/update",
         {
-            "ENABLE_OLLAMA_API": False,
+            "ENABLE_OLLAMA_API": True,
             "OLLAMA_BASE_URLS": [service_url(config, "ollama")],
             "OLLAMA_API_CONFIGS": {},
         },
@@ -410,12 +381,9 @@ def check(config):
             raise RuntimeError(f"{package}: expected {required}, found {actual}")
     required = {
         "input directory": data_path(config, "inputs"),
-        "default model": data_path(config, "default_model"),
         "Blender executable": data_path(config, "blender_exe"),
-        "Excel executable": Path(config["excel_vba"]["executable"]),
-        "Excel VBA add-in": resolve(config, config["excel_vba"]["addin_path"]),
+        "Excel executable": Path(config["excel"]["executable"]),
         "Capability registry": resolve(config, config["capability_registry"]),
-        "Blender add-on source": ROOT / "blender" / config["blender_addon"]["module"] / "__init__.py",
         "Blender trusted runner": ROOT / "blender/blender_runner.py",
         "Blender subprocess entry": ROOT / "blender/job_entry.py",
     }
@@ -425,9 +393,7 @@ def check(config):
     registry = load_registry(resolve(config, config["capability_registry"]))
     for capability_id in (
         "system.status",
-        "workflow.excel_to_blender",
         "workflow.process_folder",
-        "blender.create_colored_primitive",
     ):
         registry.require(capability_id)
     data_path(config, "outputs").mkdir(parents=True, exist_ok=True)
@@ -441,9 +407,6 @@ def discover_addons(config, requested_modules, write_proposals=False):
 
     registry = load_registry(resolve(config, config["capability_registry"]))
     modules = requested_modules or registry.addon_modules()
-    configured_module = config["blender_addon"]["module"]
-    if configured_module not in modules:
-        modules.append(configured_module)
     modules = list(dict.fromkeys(modules))
     directory = ROOT / "runtime" / "discovered"
     report = BlenderAdapter().discover(modules, directory)

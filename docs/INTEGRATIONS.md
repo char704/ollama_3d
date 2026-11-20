@@ -4,13 +4,13 @@ Tài liệu này mô tả chính xác những file cần thay đổi khi:
 
 - thêm một Blender add-on mới;
 - cập nhật hoặc thay Blender add-on hiện có;
-- thay Excel VBA add-in;
+- nghiệm thu luồng Excel → VBOM → Blender;
 - kiểm tra Qwen có chọn đúng hành động mà không nhận quá nhiều candidate.
 
 ## 1. Cách hệ thống chọn và gọi integration
 
 Open WebUI chỉ gửi nội dung chat tới REST agent. Qwen không nhận trực tiếp toàn bộ
-macro hay operator trên máy.
+toàn bộ operator trên máy.
 
 ```text
 Open WebUI
@@ -20,10 +20,10 @@ Open WebUI
   → Python chỉ giữ tối đa 5 candidate liên quan
   → Qwen 4B chọn candidate và trích tham số
   → Python kiểm tra enum, schema, allowlist và đường dẫn
-  → Excel COM/VBA hoặc Blender subprocess
+  → Python/Excel COM hoặc Blender subprocess
 ```
 
-`qwen3.5:0.8b` chỉ trả lời chat ngắn. Model này không chọn hoặc chạy Excel/Blender.
+Các yêu cầu JHV đi từ intent đến workflow cố định. Registry và selector tiếp tục phục vụ các operator/workflow Blender mở rộng.
 
 Nguồn capability:
 
@@ -262,131 +262,23 @@ Không ghi đè pack cũ ngay:
 
 Cách này giữ rollback: chỉ cần disable module mới và enable lại operator cũ.
 
-## 5. Thay Excel VBA add-in
+## 5. Kiểm thử workflow JHV với Python exporter
 
-Excel không dùng discovery. Python gọi đúng macro được allowlist trong
-`capabilities.json` bằng Windows COM.
+Excel COM đọc workbook ở chế độ read-only. Python xuất `materials.vbom` theo
+định dạng JHV và kiểm tra dữ liệu BOM trước khi chuyển cho Blender.
+Luồng tự động chỉ yêu cầu Excel và module Blender `jhv_dpc` đã đăng ký operator
+`jhv.run_dpc_automation`. Kiểm tra readiness tại `/integrations/status`.
 
-### 5.1. Contract bắt buộc
+Gửi `POST /jhv/run` với `excel_path`, `model_path` và `output_dir` để chạy cả hai
+bước. Bỏ `model_path` để chỉ xuất VBOM. Có thể chỉ định `sheet_name`; mặc định
+đọc sheet đang active. Dùng `POST /jhv/process-folder` với `input_dir` và
+`output_dir` để chạy từ một bộ file xác định duy nhất.
 
-Add-in tương thích phải là `.xlam` và cung cấp hai public macro trong standard VBA
-module:
-
-```text
-Ollama3D_Ping() As String
-ExportVBOM(source_excel, output_directory, run_id) As String
-```
-
-`Ollama3D_Ping` phải trả:
-
-```text
-ollama3d-proof|<version>
-```
-
-`ExportVBOM` phải:
-
-- đọc workbook `source_excel`;
-- tạo `<output_directory>/materials.vbom`;
-- tạo `<output_directory>/excel-proof.json`;
-- ghi đúng `run_id` và `producer: ollama3d-vba` trong proof;
-- trả về đường dẫn tuyệt đối của `materials.vbom`.
-
-Adapter sẽ từ chối kết quả nếu tên file, producer, run ID hoặc đường dẫn proof không
-khớp. Excel được mở bằng `DispatchEx`, add-in read-only và tiến trình được đóng sau
-mỗi tác vụ.
-
-### 5.2. Thay file nhưng giữ tên và macro
-
-Nếu file mới vẫn tên `Ollama3DProof.xlam` và giữ hai macro trên, chỉ cần:
-
-1. sao lưu file hiện tại;
-2. đặt file mới ở vị trí mong muốn;
-3. sửa `excel_vba.addin_path` trong `config.json` nếu đường dẫn thay đổi;
-4. chạy kiểm tra bên dưới.
-
-Ví dụ:
-
-```json
-"excel_vba": {
-  "executable": "C:/Program Files/Microsoft Office/Root/Office16/EXCEL.EXE",
-  "addin_path": "excel/Ollama3DProof.xlam",
-  "timeout_seconds": 90
-}
-```
-
-### 5.3. Đổi tên file add-in
-
-Nếu đổi thành `CompanyTools.xlam`, phải sửa cả ba vị trí logic:
-
-1. `config.json` → `excel_vba.addin_path`;
-2. `capabilities.json` → target của `excel.ping`;
-3. `capabilities.json` → target của `excel.export_vbom`.
-
-```json
-{
-  "id": "excel.ping",
-  "target": "'CompanyTools.xlam'!Ollama3D_Ping"
-}
-```
-
-```json
-{
-  "id": "excel.export_vbom",
-  "target": "'CompanyTools.xlam'!ExportVBOM"
-}
-```
-
-Tên workbook trong target phải trùng chính xác tên file được mở. Chỉ đổi
-`addin_path` mà không đổi target sẽ khiến Excel tìm workbook macro cũ và thất bại.
-
-### 5.4. Đổi tên macro hoặc contract
-
-Nếu chỉ đổi tên macro, cập nhật target tương ứng trong `capabilities.json`. Nếu đổi
-tham số hoặc định dạng kết quả, cần cập nhật đồng bộ:
-
-- `scripts/excel_vba_worker.py` — cách truyền đối số và nhận giá trị;
-- `adapters/excel_vba.py` — kiểm tra kết quả/proof;
-- workflow sử dụng kết quả;
-- unit test và test Excel thật;
-- version trong capability nếu contract đã thay đổi.
-
-Không cho Qwen truyền tên macro. Macro luôn phải được chọn từ allowlist registry.
-
-### 5.5. Kiểm thử add-in mới
-
-```powershell
-# Kiểm tra file, registry và dependency
-.\.venv\Scripts\python.exe manage.py check
-
-# Khởi động lại API khi config/source đã đổi
-.\Open-WebUI.cmd --no-browser
-
-# Trạng thái dịch vụ
-.\.venv\Scripts\python.exe manage.py status
-```
-
-Chạy workflow thật vào thư mục test riêng:
-
-```powershell
-$body = @{
-  excel_path = 'inputs/Footwear_BOM.xlsx'
-  model_path = 'inputs/Sneaker_Unassigned.blend'
-  output_dir = 'outputs/addin-acceptance'
-} | ConvertTo-Json
-
-Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8090/proof/run `
-  -ContentType application/json `
-  -Body $body `
-  -TimeoutSec 300
-```
-
-Kết quả chỉ đạt khi:
-
-- step `export_vbom_with_vba` là `completed`;
-- `excel-proof.json` tồn tại và đúng version/run ID;
-- step Blender là `completed`;
-- `verification.json` xác nhận mở lại `.blend` thành công.
+Nghiệm thu trên hai mẫu. Model đã có Article phải trả `ARTICLE_ALREADY_EXISTS`
+kèm danh sách mã trùng. Với model gốc, kiểm tra đủ mã Article, đường dẫn
+`result.blend`, `verified_after_reopen` và hash trong `verification.json`.
+Khi có `completed_with_warnings`, kiểm tra `warnings` và `articles` trong
+kết quả trước khi bàn giao.
 
 ## 6. Rollback
 
@@ -397,13 +289,6 @@ Kết quả chỉ đạt khi:
 - phục hồi add-on Python cũ trong Blender;
 - phục hồi `addon.json`/`docs.md` từ Git nếu metadata đã đổi;
 - chạy `manage.py check` và test lại.
-
-### Excel
-
-- phục hồi `.xlam` cũ;
-- phục hồi `addin_path` và hai macro target;
-- chạy `Open-WebUI.cmd --no-browser`;
-- chạy một workflow acceptance vào output mới.
 
 Không dùng output của lần chạy thất bại làm input cho lần rollback test.
 
@@ -418,5 +303,5 @@ git diff --check
 git status --short
 ```
 
-Không commit `.xlam` mới nếu chưa xác minh macro thật. Không commit `runtime/`,
+Không commit `runtime/`,
 `outputs/`, `logs/`, `evidence/` hoặc dữ liệu workbook khách hàng.

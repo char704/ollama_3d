@@ -11,7 +11,7 @@ class FolderWorkflowTests(unittest.TestCase):
     def _relative(self, path):
         return Path(path).resolve().relative_to(ROOT).as_posix()
 
-    @patch.object(folder_workflow, "run_excel_to_blender")
+    @patch.object(folder_workflow, "execute_jhv")
     def test_unique_excel_and_blend_run_with_relative_folders(self, execute):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             input_dir = Path(folder) / "inputs"
@@ -30,18 +30,18 @@ class FolderWorkflowTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(
-            result["folder_selection"]["workflow"], "workflow.excel_to_blender"
+            result["folder_selection"]["workflow"], "workflow.jhv_excel_to_articles"
         )
-        execute.assert_called_once_with(excel.resolve(), model.resolve(), output.resolve())
+        execute.assert_called_once_with(excel.resolve(), output.resolve(), model_path=model.resolve())
 
-    @patch.object(folder_workflow, "run_blender_operator")
-    def test_unique_vbom_and_blend_extract_run_id(self, execute):
+    @patch.object(folder_workflow, "apply_jhv_vbom")
+    def test_unique_vbom_and_blend_calls_jhv(self, execute):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             input_dir = Path(folder) / "inputs"
             input_dir.mkdir()
-            vbom = input_dir / "order.vbom.xml"
+            vbom = input_dir / "order.vbom"
             model = input_dir / "Shoe.blend"
-            vbom.write_text('<vbom format="proof-v1" run_id="ORDER-7"/>', encoding="utf-8")
+            vbom.write_text('<VBOM/>', encoding="utf-8")
             model.write_bytes(b"blend")
             output = Path(folder) / "outputs"
             execute.return_value = {"ok": True, "status": "completed"}
@@ -52,17 +52,16 @@ class FolderWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             result["folder_selection"]["workflow"],
-            "blender.ollama3d_proof.apply_vbom",
+            "blender.jhv_dpc.run_dpc_automation",
         )
         execute.assert_called_once_with(
-            "blender.ollama3d_proof.apply_vbom",
-            {"filepath": str(vbom.resolve()), "run_id": "ORDER-7"},
+            vbom.resolve(),
             model.resolve(),
             output.resolve(),
         )
 
-    @patch.object(folder_workflow, "run_excel_to_blender")
-    @patch.object(folder_workflow, "run_blender_operator")
+    @patch.object(folder_workflow, "execute_jhv")
+    @patch.object(folder_workflow, "apply_jhv_vbom")
     def test_ambiguous_folder_asks_instead_of_guessing(self, operator, excel):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             input_dir = Path(folder) / "inputs"
@@ -74,7 +73,7 @@ class FolderWorkflowTests(unittest.TestCase):
                 self._relative(input_dir), self._relative(Path(folder) / "outputs")
             )
         self.assertEqual(result["status"], "needs_input")
-        self.assertIn("'xlsx': 2", result["reason"])
+        self.assertEqual(len(result["inventory"]["spreadsheets"]), 2)
         excel.assert_not_called()
         operator.assert_not_called()
 

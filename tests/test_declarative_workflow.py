@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from tests.blender_fixtures import save_fixture_model
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,7 +42,7 @@ def fixture_registry():
         },
     )
     definition = load_definition(
-        ROOT / "workflows" / "definitions", "workflow.fixture_generic"
+        ROOT / "tests" / "fixtures", "workflow.fixture_generic"
     )
 
     class FixtureRegistry:
@@ -59,7 +60,7 @@ def fixture_registry():
 class WorkflowDefinitionTests(unittest.TestCase):
     def test_fixture_definition_interpolates_only_exact_input_references(self):
         definition = load_definition(
-            ROOT / "workflows" / "definitions", "workflow.fixture_generic"
+            ROOT / "tests" / "fixtures", "workflow.fixture_generic"
         )
         resolved = interpolate_definition(
             definition,
@@ -84,7 +85,7 @@ class WorkflowDefinitionTests(unittest.TestCase):
 
     def test_unknown_inputs_and_postconditions_are_rejected(self):
         definition = load_definition(
-            ROOT / "workflows" / "definitions", "workflow.fixture_generic"
+            ROOT / "tests" / "fixtures", "workflow.fixture_generic"
         )
         with self.assertRaisesRegex(ValueError, "inputs do not match"):
             interpolate_definition(definition, {"model_path": "x"})
@@ -99,15 +100,14 @@ class DeclarativeWorkflowBlenderTests(unittest.TestCase):
     @patch.object(blender_workflow, "log")
     def test_two_fixture_steps_run_in_one_verified_blender_session(self, _log):
         fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
-        proof_addon = ROOT / "blender" / "ollama3d_proof_addon"
-        model = ROOT / "inputs" / "Sneaker_Unassigned.blend"
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             folder = Path(folder)
+            model = folder / "fixture.blend"
+            save_fixture_model(model)
             scripts = folder / "scripts"
             addons = scripts / "addons"
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
-            shutil.copytree(proof_addon, addons / proof_addon.name)
             output = folder / "outputs"
             with patch.dict(os.environ, {"BLENDER_USER_SCRIPTS": str(scripts)}), patch.object(
                 blender_workflow, "REGISTRY", fixture_registry()

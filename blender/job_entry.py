@@ -10,18 +10,16 @@ import bpy
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from blender_runner import (
-    apply_vbom,
-    create_colored_primitive,
     discover,
+    refresh_jhv_index,
     run_operator,
     run_steps,
     status,
 )
 
 OPERATIONS = {
-    "apply_vbom": apply_vbom,
-    "create_colored_primitive": create_colored_primitive,
     "discover": discover,
+    "refresh_jhv_index": refresh_jhv_index,
     "run_operator": run_operator,
     "run_steps": run_steps,
     "status": status,
@@ -56,6 +54,8 @@ def main():
             "error": str(exc),
             "traceback": traceback.format_exc(),
         }
+        if hasattr(exc, "code"):
+            result.update(error_code=exc.code, details=exc.details)
     with open(result_path, "w", encoding="utf-8") as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2)
     if not result["ok"]:

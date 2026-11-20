@@ -1,0 +1,65 @@
+{
+  "module": "jhv_dpc",
+  "description": "Discovered Blender add-on: jhv_dpc",
+  "operators": {
+    "jhv.paste_vbom_path": {
+      "id": "blender.jhv_dpc.paste_vbom_path",
+      "enabled": false,
+      "risk": "mutating",
+      "description": "Dán đường dẫn file VBOM từ Clipboard (Bộ nhớ tạm)",
+      "background_safe": true,
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "jhv.run_dpc": {
+      "id": "blender.jhv_dpc.run_dpc",
+      "enabled": false,
+      "risk": "mutating",
+      "description": "Tự động tách scene, chuẩn hóa vật liệu và gán shader với tốc độ tối đa",
+      "background_safe": true,
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "jhv.run_dpc_automation": {
+      "id": "blender.jhv_dpc.run_dpc_automation",
+      "enabled": true,
+      "risk": "filesystem",
+      "description": "Đường dẫn đến file VBOM cần xử lý",
+      "background_safe": true,
+      "params": {
+        "type": "object",
+        "properties": {
+          "vbom_path": {
+            "type": "string",
+            "x-path": true
+          }
+        },
+        "required": [
+          "vbom_path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "jhv.scan_cache": {
+      "id": "blender.jhv_dpc.scan_cache",
+      "enabled": false,
+      "risk": "mutating",
+      "description": "Quét ngầm và cập nhật lại chỉ mục thư viện asset",
+      "background_safe": true,
+      "params": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  }
+}

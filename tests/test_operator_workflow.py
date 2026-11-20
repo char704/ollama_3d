@@ -1,5 +1,4 @@
 import os
-import json
 import shutil
 import subprocess
 import tempfile
@@ -8,9 +7,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from adapters.blender import BlenderAdapter
-from adapters.common import BLENDER, REGISTRY
+from adapters.common import BLENDER
 from project_config import ROOT
+from tests.blender_fixtures import save_fixture_model
 from workflows import operator_workflow
+from workflows.jhv_workflow import apply_jhv_vbom
 
 
 GENERIC_CAPABILITY = {
@@ -96,102 +97,72 @@ class OperatorWorkflowTests(unittest.TestCase):
 
 @unittest.skipUnless(BLENDER.is_file(), "Configured Blender executable is unavailable")
 class BlenderOperatorRegressionTests(unittest.TestCase):
-    @staticmethod
-    def _inspect(adapter, model_path, directory, label):
-        result_path = directory / f"inspect-{label}.json"
-        subprocess.run(
-            [
-                str(BLENDER),
-                "--background",
-                str(model_path),
-                "--python-exit-code",
-                "1",
-                "--python",
-                str(ROOT / "tests" / "fixtures" / "inspect_blend.py"),
-                "--",
-                str(result_path),
-            ],
-            check=True,
-            timeout=60,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-        return json.loads(result_path.read_text(encoding="utf-8"))
-
-    def test_generic_apply_vbom_matches_legacy_path_after_reopen(self):
-        capability = REGISTRY.require(
-            "blender.ollama3d_proof.apply_vbom", provider="blender_operator"
-        )
-        source_model = ROOT / "inputs" / "Sneaker_Unassigned.blend"
-        vbom = ROOT / "tests" / "fixtures" / "proof_v1.vbom.xml"
-        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
-            folder = Path(folder)
-            adapter = BlenderAdapter()
-            generic_output = folder / "generic.blend"
-            generic_report = folder / "generic-report.json"
-            generic = adapter.run_operator(
-                capability,
-                {"filepath": str(vbom), "run_id": "TEST-RUN"},
-                source_model,
-                generic_output,
-                generic_report,
-                "TEST-RUN",
-            )
-            legacy_output = folder / "legacy.blend"
-            legacy_report = folder / "legacy-report.json"
-            adapter.apply(
-                vbom,
-                source_model,
-                legacy_output,
-                legacy_report,
-                "TEST-RUN",
-            )
-            generic_scene = self._inspect(adapter, generic_output, folder, "generic")
-            legacy_scene = self._inspect(adapter, legacy_output, folder, "legacy")
-
-        self.assertTrue(generic["verified_after_reopen"])
-        self.assertTrue(generic["blender_version"])
-        self.assertEqual(generic["transport"], "blender-subprocess")
-        self.assertEqual(generic_scene, legacy_scene)
-        self.assertEqual(
-            {value["color_hex"] for value in generic_scene.values()},
-            {"#3366CC", "#EEEEEE", "#CC3333"},
-        )
-        self.assertEqual(
-            {value["material"] for value in generic_scene.values()},
-            {"Fixture Upper", "Fixture Sole", "Fixture Laces"},
-        )
-        self.assertEqual(
-            set(generic["diff"]["objects"]["changed"]),
-            {"Upper", "Sole", "Laces"},
-        )
-
-    @patch.object(operator_workflow, "log")
-    def test_exposed_registry_capability_runs_through_workflow(self, _log):
-        source_model = ROOT / "inputs" / "Sneaker_Unassigned.blend"
-        vbom = ROOT / "tests" / "fixtures" / "proof_v1.vbom.xml"
-        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
-            state = operator_workflow.run_blender_operator(
-                "blender.ollama3d_proof.apply_vbom",
-                {"filepath": str(vbom), "run_id": "TEST-RUN"},
-                source_model,
-                folder,
-            )
-            self.assertEqual(state["status"], "completed")
-            self.assertTrue(Path(state["output_path"]).is_file())
-            self.assertTrue(Path(state["evidence"]["verification"]).is_file())
-
-    def test_runner_rejects_failed_poll_and_preserves_operator_error(self):
-        fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
-        proof_addon = ROOT / "blender" / "ollama3d_proof_addon"
-        source_model = ROOT / "inputs" / "Sneaker_Unassigned.blend"
+    @unittest.skipUnless((ROOT / "addons/jhv_dpc/jhv_dpc.py").is_file(), "Internal JHV add-on is not available")
+    def test_jhv_persistent_asset_map_hits_and_invalidates(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             folder = Path(folder)
             scripts = folder / "scripts"
             addons = scripts / "addons"
+            library = folder / "library"
+            addons.mkdir(parents=True)
+            library.mkdir()
+            shutil.copy2(ROOT / "addons" / "jhv_dpc" / "jhv_dpc.py", addons)
+            environment = os.environ.copy()
+            environment.update(
+                BLENDER_USER_SCRIPTS=str(scripts),
+                LOCALAPPDATA=str(folder / "localappdata"),
+            )
+            expression = (
+                "import jhv_dpc; from pathlib import Path; "
+                f"jhv_dpc.thread_scan_indices([Path({str(library)!r})])"
+            )
+
+            def scan():
+                completed = subprocess.run(
+                    [str(BLENDER), "--background", "--python-exit-code", "1",
+                     "--python-expr", expression],
+                    check=True, timeout=60, capture_output=True, text=True,
+                    env=environment,
+                )
+                return completed.stdout
+
+            self.assertIn('"status": "MISS_REFRESH"', scan())
+            self.assertIn('"status": "HIT"', scan())
+            (library / "changed.blend").touch()
+            invalidated = scan()
+            self.assertIn('"status": "MISS_REFRESH"', invalidated)
+            self.assertIn('"reason": "SOURCE_CHANGED"', invalidated)
+
+    @unittest.skipUnless((ROOT / "addons/jhv_dpc/jhv_dpc.py").is_file(), "Internal JHV add-on is not available")
+    def test_jhv_stops_before_running_operator_when_article_exists(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            folder = Path(folder)
+            model = folder / "source.blend"
+            save_fixture_model(model, scene_name="AB1234")
+            original = model.read_bytes()
+            vbom = folder / "materials.vbom"
+            vbom.write_text('<VBOM><Part name="Upper|AB1234"><VPart/></Part></VBOM>', encoding="utf-8")
+            scripts = folder / "scripts"
+            addons = scripts / "addons"
+            addons.mkdir(parents=True)
+            shutil.copy2(ROOT / "addons" / "jhv_dpc" / "jhv_dpc.py", addons)
+            with patch.dict(os.environ, {"BLENDER_USER_SCRIPTS": str(scripts)}):
+                result = apply_jhv_vbom(vbom, model, folder / "out")
+            self.assertEqual(result["error_code"], "ARTICLE_ALREADY_EXISTS")
+            self.assertEqual(result["details"]["article_ids"], ["AB1234"])
+            self.assertEqual(list((folder / "out").rglob("result.blend")), [])
+            self.assertEqual(model.read_bytes(), original)
+
+    def test_runner_rejects_failed_poll_and_preserves_operator_error(self):
+        fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
+        with tempfile.TemporaryDirectory(dir=ROOT) as folder:
+            folder = Path(folder)
+            source_model = folder / "fixture.blend"
+            save_fixture_model(source_model)
+            scripts = folder / "scripts"
+            addons = scripts / "addons"
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
-            shutil.copytree(proof_addon, addons / proof_addon.name)
             adapter = BlenderAdapter()
             capability = {
                 "addon_module": "ollama3d_fixture_addon",

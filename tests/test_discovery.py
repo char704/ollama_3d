@@ -177,16 +177,17 @@ class BlenderDiscoveryTests(unittest.TestCase):
         self.assertTrue(report["blender_version"])
         self.assertEqual(report["transport"], "blender-subprocess")
 
+    @unittest.skipUnless((ROOT / "addons/jhv_dpc/jhv_dpc.py").is_file(), "Internal JHV add-on is not available")
     def test_multiple_user_addons_load_with_and_without_factory_startup(self):
         fixture = ROOT / "tests" / "fixtures" / "ollama3d_fixture_addon"
-        proof = ROOT / "blender" / "ollama3d_proof_addon"
+        jhv = ROOT / "addons" / "jhv_dpc" / "jhv_dpc.py"
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
             folder = Path(folder)
             scripts = folder / "scripts"
             addons = scripts / "addons"
             addons.mkdir(parents=True)
             shutil.copytree(fixture, addons / fixture.name)
-            shutil.copytree(proof, addons / proof.name)
+            shutil.copy2(jhv, addons / jhv.name)
             adapter = BlenderAdapter()
             environment = {**os.environ, "BLENDER_USER_SCRIPTS": str(scripts)}
             for factory_startup in (False, True):
@@ -199,7 +200,7 @@ class BlenderDiscoveryTests(unittest.TestCase):
                         {
                             "operation": "discover",
                             "payload": {
-                                "modules": [fixture.name, proof.name],
+                                "modules": [fixture.name, jhv.stem],
                                 "report_path": str(report_path),
                                 "run_id": label,
                             },
@@ -211,7 +212,7 @@ class BlenderDiscoveryTests(unittest.TestCase):
                     adapter._subprocess_command(
                         job_path,
                         result_path,
-                        modules=[fixture.name, proof.name],
+                        modules=[fixture.name, jhv.stem],
                         factory_startup=factory_startup,
                     ),
                     check=True,
@@ -224,7 +225,7 @@ class BlenderDiscoveryTests(unittest.TestCase):
                 self.assertTrue(result["ok"])
                 ids = set(result["result"]["operator_ids"])
                 self.assertIn("ollama3d_fixture.all_types", ids)
-                self.assertIn("ollama3d_proof.apply_vbom", ids)
+                self.assertIn("jhv.run_dpc_automation", ids)
 
 
 if __name__ == "__main__":

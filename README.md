@@ -6,12 +6,12 @@ Project chạy local trên Windows với một đường xử lý duy nhất:
 Open WebUI
   → OpenAI-compatible REST API (127.0.0.1:8090/v1)
   → agent Python + Ollama
-  ├─ Excel COM → VBA add-in
-  └─ Blender background subprocess → add-on allowlist
+  → Excel COM đọc BOM → Python xuất VBOM
+  → Blender chạy add-on JHV → lưu và mở lại model
 ```
 
-Không có lớp giao thức tool trung gian. Excel được gọi trực tiếp từ workflow Python
-qua COM/VBA; Blender được gọi trực tiếp bằng subprocess và fixed job entry.
+Excel được đọc qua COM ở chế độ read-only. Python tạo VBOM. Blender gọi
+`jhv.run_dpc_automation` trong subprocess.
 
 ## Cài đặt
 
@@ -22,8 +22,9 @@ sau đó chạy:
 .\Install.cmd
 ```
 
-Installer tạo `.venv`, kiểm tra add-in/add-on, model local và khởi động REST API với
-Open WebUI.
+Cài module `jhv_dpc` vào thư mục add-on đúng phiên bản Blender trước khi chạy
+installer. Installer tạo `.venv`, kiểm tra tích hợp và model local, rồi khởi động
+REST API cùng Open WebUI.
 
 Các lần sau:
 
@@ -32,6 +33,34 @@ Các lần sau:
 ```
 
 Mở <http://127.0.0.1:8080> và chọn model `ollama3d-direct`.
+
+## Cập nhật trên máy công ty
+
+1. Chờ workflow đang chạy hoàn tất, rồi đóng Blender và chạy `Stop.cmd`. Sao lưu
+   `config.json` và các file làm việc quan trọng. Giữ thư mục `webui-data` nếu
+   muốn giữ cấu hình Open WebUI hiện tại.
+2. Trong thư mục dự án, cập nhật nhánh `main` và cài bản `jhv_dpc.py` có SQLite
+   nhận từ nguồn nội bộ đã được công ty duyệt:
+
+   ```powershell
+   git pull --ff-only origin main
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\Update.ps1 -SkipPull -JhvAddonPath 'E:\DuongDanNoiBo\jhv_dpc.py'
+   ```
+
+   Sau lần đầu, có thể bỏ lệnh `git pull` riêng và chạy `Update.ps1` với
+   `-JhvAddonPath`, bỏ `-SkipPull`. Script dùng Blender được cấu hình trong
+   `config.json` và sao lưu add-on cũ trong `runtime\addon-backups`.
+   Nếu Git báo xung đột cấu hình local, giữ bản sao rồi gộp các đường dẫn
+   máy công ty vào cấu hình mới trước khi tiếp tục. Tránh dùng lệnh reset.
+3. Trong Blender, kiểm tra `Asset Library Path` của JHV trỏ đến thư mục cha
+   chứa `Adidas Library` và `Generic Library`, ví dụ `E:\Blender` nếu cả hai
+   thư mục nằm ngay bên dưới. Mở Asset Browser để Blender có metadata thư viện,
+   lưu Preferences, rồi làm bước refresh bên dưới.
+4. Mở lại bằng `Open-WebUI.cmd`. Nếu máy chưa có `.venv`, chạy `Install.cmd`
+   sau khi đã cài add-on và chỉnh các đường dẫn máy local.
+
+Mã nguồn add-on JHV nội bộ, BOM, model, file Excel add-in và Asset Library được
+chuyển qua kênh nội bộ của công ty. Repo GitHub cung cấp mã tích hợp Ollama3D.
 
 ## Xử lý folder tương đối
 
@@ -43,10 +72,11 @@ Xử lý folder inputs và xuất kết quả vào outputs
 
 Workflow kiểm kê file trước khi chạy:
 
-- một `.xlsx` + một `.blend` → Excel add-in → VBOM → Blender add-on;
-- một VBOM `.xml` + một `.blend` → áp VBOM bằng Blender add-on;
-- thiếu file, trùng file cần chọn hoặc nhiều workflow phù hợp → `needs_input`,
-  không đoán.
+- Chat tự chạy cả hai bước khi có đúng một Excel BOM và một model `.blend`.
+- Yêu cầu “chỉ xuất VBOM” tạo `materials.vbom`. Để dùng VBOM có sẵn, yêu cầu áp file `.vbom` lên model.
+- Nếu thiếu file hoặc có nhiều lựa chọn, trả lời bằng mã JHV được hiển thị, theo sau là tên file hoặc đường dẫn. Mã có hiệu lực 15 phút và dùng một lần.
+- Model đã có Article trùng với VBOM trả lỗi `ARTICLE_ALREADY_EXISTS`. Dùng model gốc và có thể tái sử dụng VBOM đã xuất.
+- Khi Blender đã xác minh file kết quả nhưng báo thiếu part, màu hoặc vật liệu, trạng thái là `completed_with_warnings`. Báo cáo mã Article, cảnh báo và đường dẫn xác minh nằm trong kết quả workflow.
 
 Mọi đường dẫn tương đối được resolve từ root project và kiểm tra bằng `scoped_path`.
 Đường dẫn đi ra ngoài vùng cho phép bị từ chối.
@@ -56,7 +86,7 @@ REST tương đương:
 ```powershell
 $body = @{ input_dir = 'inputs'; output_dir = 'outputs' } | ConvertTo-Json
 Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8090/proof/process-folder `
+  -Uri http://127.0.0.1:8090/jhv/process-folder `
   -ContentType application/json `
   -Body $body
 ```
@@ -70,9 +100,43 @@ Có thể bỏ qua UI và gọi agent trực tiếp:
   "Xử lý folder inputs và xuất kết quả vào outputs"
 ```
 
-Model 4B phân loại intent/chọn capability/trích tham số. Model 0.8B chỉ trả lời
-hội thoại ngắn sau khi 4B xác nhận intent là `chat`; nó không kích hoạt Excel hoặc
-Blender.
+Model cấu hình phân loại yêu cầu và trích tham số. Python kiểm tra đầu vào và
+thực thi workflow. Nếu cần chọn nhiều lượt, dùng Open WebUI hoặc chat API để giữ
+mã tiếp tục trong cùng tiến trình.
+
+### Asset index SQLite của JHV
+
+Trong Blender, cấu hình Asset Library của JHV và để Blender cập nhật Asset Index.
+Sau đó bấm **Refresh Library Cache** hoặc chạy từ root project:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/jhv_cli.py refresh-index
+```
+
+Refresh sau khi thêm, sửa, đổi tên hoặc xóa asset. Nếu refresh thất bại, bản
+SQLite trước đó vẫn còn. Báo cáo job ghi phiên bản và thời điểm index được cập nhật.
+Job chỉ kiểm tra các file mà index chọn. Asset mới, kể cả asset có ưu tiên cao
+hơn một kết quả cũ, chỉ được tra qua SQLite sau khi refresh.
+
+Để kiểm chứng cùng một VBOM trên model gốc, đặt seed như nhau cho các lần chạy:
+
+```powershell
+$env:PYTHONHASHSEED = '0'
+.\.venv\Scripts\python.exe scripts/jhv_cli.py apply outputs/materials.vbom outputs --model inputs/shoe.blend --resolver compare
+.\.venv\Scripts\python.exe scripts/jhv_cli.py apply outputs/materials.vbom outputs --model inputs/shoe.blend --resolver sqlite
+```
+
+`legacy` là mặc định. `compare` ghi khác biệt theo mã nhưng dùng kết quả legacy
+để gán. `sqlite` dùng index mới và quay về legacy khi index thiếu, lỗi hoặc file
+được chọn đã đổi. Với Open WebUI, đặt biến môi trường `JHV_DPC_RESOLVER` cho tiến
+trình chạy Ollama3D nếu cần chọn chế độ.
+
+Xem `asset_resolver`, `addon_timings.resolver` và `timings` trong
+`blender-operator-proof.json`. Trên máy có thư viện thật, đo riêng lần refresh
+và chạy ba lần mỗi chế độ `legacy` và `sqlite`. Dùng `compare` để xác nhận không
+có sai khác trong tra cứu, rồi đối chiếu shader và texture với kết quả Blender
+thủ công. Mục tiêu là giảm ít nhất 50% thời gian quét/xác thực index và tổng thời
+gian trung vị không tăng.
 
 ## Thêm Blender add-on
 
@@ -92,8 +156,8 @@ addons/<module>/
   workflows/*.json
 ```
 
-Hướng dẫn đầy đủ cho các trường hợp thêm add-on, cập nhật/đổi add-on và thay Excel
-add-in nằm tại [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md). Tài liệu cũng mô tả
+Hướng dẫn thêm hoặc cập nhật add-on và nghiệm thu JHV nằm tại
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md). Tài liệu cũng mô tả
 contract bắt buộc, cách viết metadata để Qwen chọn đúng, kiểm thử và rollback.
 
 ## Lệnh quản trị
@@ -116,7 +180,7 @@ contract bắt buộc, cách viết metadata để Qwen chọn đúng, kiểm th
 ## An toàn
 
 - Không dựng Python từ tham số model.
-- Excel chỉ gọi macro VBA đã đăng ký.
+- Excel COM đọc workbook và Python xuất VBOM.
 - Blender chỉ dispatch operation cố định qua `job_entry.py`.
 - Add-on operator phải nằm trong allowlist và được bật.
 - Thiếu hoặc mơ hồ đầu vào thì hỏi lại.

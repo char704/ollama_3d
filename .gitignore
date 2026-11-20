@@ -20,6 +20,6 @@ dist/
 *.inspect.ndjson
 # Do not accidentally publish company workbooks/models.
 inputs/*
-!inputs/Footwear_BOM.xlsx
-!inputs/Sneaker_Unassigned.blend
-!inputs/before.png
+!inputs/.gitkeep
+excel/*.xlam
+addons/jhv_dpc/jhv_dpc.py

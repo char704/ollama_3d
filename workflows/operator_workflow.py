@@ -6,7 +6,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from adapters.blender import BlenderAdapter
+from adapters.blender import BlenderAdapter, BlenderJobError
 from adapters.common import CONFIG, REGISTRY, log, write_json
 from capability_discovery import validate_params
 from project_config import data_path, scoped_path
@@ -19,9 +19,10 @@ def _now():
 
 
 class _WorkflowFailure(RuntimeError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, details=None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 def run_blender_operator(capability_id, params, model_path, output_dir):
@@ -77,6 +78,8 @@ def run_blender_operator(capability_id, params, model_path, output_dir):
                 report_path,
                 run_id,
             )
+        except BlenderJobError as exc:
+            raise _WorkflowFailure(exc.code, str(exc), exc.details) from exc
         except Exception as exc:
             raise _WorkflowFailure("BLENDER_EXECUTION_FAILED", str(exc)) from exc
         state["steps"].append(
@@ -93,9 +96,12 @@ def run_blender_operator(capability_id, params, model_path, output_dir):
         }
         verification_path = run_directory / "verification.json"
         write_json(verification_path, verification)
+        warnings = result.get("warnings", [])
+        if "articles" in result:
+            state.update(articles=result["articles"], warnings=warnings)
         state.update(
             ok=True,
-            status="completed",
+            status="completed_with_warnings" if warnings else "completed",
             current_step=None,
             finished_at=_now(),
             output_path=str(output_path),
@@ -115,6 +121,7 @@ def run_blender_operator(capability_id, params, model_path, output_dir):
             current_step=None,
             failed_step=failed_step,
             error_code=exc.code,
+            details=exc.details,
             error=str(exc),
             finished_at=_now(),
         )
